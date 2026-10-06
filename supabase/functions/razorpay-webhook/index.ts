@@ -70,7 +70,7 @@ export default {
     });
     if (eventError) return json({ error: "Webhook event persistence failed", code: "WEBHOOK_EVENT_RECORD_FAILED" }, 500);
 
-    if (eventRecord?.duplicate === true) return json({ received: true, duplicate: true }, 200);
+    if (eventRecord?.status === 'duplicate') return json({ received: true, duplicate: true }, 200);
 
     const orderId = typeof eventEntity.order_id === "string" ? eventEntity.order_id : "";
     const paymentId = typeof eventEntity.id === "string" ? eventEntity.id : "";
