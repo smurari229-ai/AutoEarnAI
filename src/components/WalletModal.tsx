@@ -143,7 +143,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
     const availableBalance = Math.max(0, wallet.totalBalance - wallet.lockedInTrades);
     if (amountNum > availableBalance) {
-      setWithdrawError(`Insufficient available balance. Maximum withdrawable is ₹${availableBalance.toFixed(2)}`;
+      setWithdrawError(`Insufficient available balance. Maximum withdrawable is ₹${availableBalance.toFixed(2)}`);
       return;
     }
 
