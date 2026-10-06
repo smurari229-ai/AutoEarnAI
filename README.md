@@ -23,7 +23,7 @@ The red simulation warning is intentionally permanent and non-dismissible so a n
 The repository contains engineering foundations for:
 
 - React + TypeScript + Vite + Tailwind CSS UI.
-- Supabase Auth integration.
+- Supabase Auth integration with signed JWTs held in memory only; the browser does not persist auth tokens in localStorage. A page reload requires signing in again until an httpOnly-cookie session is implemented.
 - Supabase/Postgres persistence and Row Level Security.
 - Server-side authentication checks on protected API routes.
 - Server-authoritative AI usage limits.
