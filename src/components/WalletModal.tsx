@@ -47,10 +47,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   const [depositAmount, setDepositAmount] = useState<number>(5000);
   const [customDeposit, setCustomDeposit] = useState<string>('');
   const [depositMethod, setDepositMethod] = useState<'upi' | 'card' | 'netbanking' | 'crypto'>('upi');
-  const [upiVpa, setUpiVpa] = useState<string>('trader@okaxis');
-  const [cardNumber, setCardNumber] = useState<string>('4532 8910 2341 9081');
-  const [cardExpiry, setCardExpiry] = useState<string>('09/28');
-  const [cardCvv, setCardCvv] = useState<string>('842');
+  const [upiVpa, setUpiVpa] = useState<string>('');
+  const [cardNumber, setCardNumber] = useState<string>('');
+  const [cardExpiry, setCardExpiry] = useState<string>('');
+  const [cardCvv, setCardCvv] = useState<string>('');
   const [selectedBank, setSelectedBank] = useState<string>('HDFC Bank');
   const [cryptoNetwork, setCryptoNetwork] = useState<'TRC20' | 'ERC20'>('TRC20');
   const [isProcessingDeposit, setIsProcessingDeposit] = useState<boolean>(false);
@@ -59,11 +59,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
   // Withdrawal State
   const [withdrawAmount, setWithdrawAmount] = useState<string>('2500');
   const [withdrawMethod, setWithdrawMethod] = useState<'bank' | 'upi' | 'crypto'>('upi');
-  const [withdrawUpi, setWithdrawUpi] = useState<string>('user@okhdfcbank');
-  const [bankAccount, setBankAccount] = useState<string>('50100234891234');
-  const [bankIfsc, setBankIfsc] = useState<string>('HDFC0000123');
-  const [accountHolder, setAccountHolder] = useState<string>('Primary Account Holder');
-  const [cryptoAddress, setCryptoAddress] = useState<string>('TX8mZqj9BvLw1cKq...TRC20');
+  const [withdrawUpi, setWithdrawUpi] = useState<string>('');
+  const [bankAccount, setBankAccount] = useState<string>('');
+  const [bankIfsc, setBankIfsc] = useState<string>('');
+  const [accountHolder, setAccountHolder] = useState<string>('');
+  const [cryptoAddress, setCryptoAddress] = useState<string>('');
   const [isProcessingWithdraw, setIsProcessingWithdraw] = useState<boolean>(false);
   const [withdrawSuccessMsg, setWithdrawSuccessMsg] = useState<string | null>(null);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
@@ -200,10 +200,10 @@ export const WalletModal: React.FC<WalletModalProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight">
-                Live Payment & Wallet Gateway
+                Payment & Wallet
               </h2>
               <p className="text-xs text-slate-400">
-                Instant UPI, Cards, Bank IMPS & Real-Time Disbursals
+                Provider-backed payments only; no demo balances or payouts
               </p>
             </div>
           </div>
@@ -389,12 +389,12 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
                         <div>
                           <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                            <span>Scan Instant Dynamic UPI QR</span>
+                            <span>Payment provider QR</span>
                             <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-mono">0% FEE</span>
                           </div>
                           <div className="text-[11px] text-slate-400">GPay, PhonePe, Paytm, CRED, BHIM</div>
                           <div className="text-[11px] text-emerald-400 font-mono mt-0.5 font-bold">
-                            autoearn.capital@icici
+                            Payment provider not configured
                           </div>
                         </div>
                       </div>
@@ -402,7 +402,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                       <div className="flex sm:flex-col gap-2 w-full sm:w-auto">
                         <button
                           type="button"
-                          onClick={() => handleCopy('autoearn.capital@icici')}
+                          onClick={() => handleCopy('Payment provider not configured')}
                           className="flex-1 sm:flex-initial px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
                         >
                           <Copy className="w-3.5 h-3.5" />
@@ -764,7 +764,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   onClick={onResetBalance}
                   className="text-xs text-rose-400 hover:text-rose-300 font-semibold underline"
                 >
-                  Reset Capital to ₹50k
+                  Demo wallet reset disabled
                 </button>
               </div>
 
