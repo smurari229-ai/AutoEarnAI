@@ -147,6 +147,49 @@ async function startServer() {
     res.json({ balance, transactions, logs: [] });
   });
 
+  app.post('/api/payment/order', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const amount = Number(req.body?.amount);
+    const amountMinor = Math.round(amount * 100);
+    const currency = String(req.body?.currency || 'INR').toUpperCase();
+    const provider = String(req.body?.provider || '').trim();
+    const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
+
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || currency !== 'INR') {
+      return res.status(400).json({ error: 'Invalid amount or currency', code: 'INVALID_PAYMENT_ORDER' });
+    }
+    if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+      return res.status(400).json({ error: 'Valid idempotency key is required', code: 'INVALID_IDEMPOTENCY_KEY' });
+    }
+    if (!provider) {
+      return res.status(503).json({ error: 'Payment provider is not configured. No payment was created.', code: 'PAYMENT_PROVIDER_NOT_CONFIGURED' });
+    }
+
+    const { data, error } = await client.from('payment_orders').insert({
+      user_id: user.id,
+      amount_minor: amountMinor,
+      currency,
+      status: 'pending',
+      provider,
+      idempotency_key: idempotencyKey,
+      metadata: { source: 'api/payment/order' }
+    }).select('id,amount_minor,currency,status,provider,idempotency_key,created_at').single();
+
+    if (error) {
+      const duplicate = String(error.message || '').toLowerCase().includes('duplicate');
+      return res.status(duplicate ? 409 : 500).json({
+        error: duplicate ? 'Duplicate payment order' : 'Unable to create payment order',
+        code: duplicate ? 'PAYMENT_ORDER_DUPLICATE' : 'PAYMENT_ORDER_CREATE_FAILED'
+      });
+    }
+
+    return res.status(201).json({ order: data, payment: null, status: 'pending' });
+  });
+
   // Real payment integration is intentionally blocked until a verified provider/webhook is configured.
   app.post('/api/wallet/deposit', (_req: Request, res: Response) => {
     res.status(503).json({
