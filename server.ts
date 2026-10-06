@@ -175,12 +175,28 @@ async function startServer() {
   });
 
   // --- WALLET & PAYMENT GATEWAY ENDPOINTS ---
-  app.get('/api/wallet/data', async (req: Request, res: Response) => {
+  async function requireUser(req: Request, res: Response) {
     const user = await getAuthenticatedUser(req);
-    const client = getUserScopedClient(req);
-
-    if (!user || !client) {
+    if (!user) {
       res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+      return null;
+    }
+    return user;
+  }
+
+  app.get('/api/wallet/data', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) {
+      res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+      return;
+    }
+
+    const { data: walletData, error: walletInitError } = await client.rpc('ensure_user_wallet');
+    if (walletInitError) {
+      console.error('[WALLET] wallet initialization failed', walletInitError);
+      res.status(500).json({ error: 'Unable to initialize wallet', code: 'WALLET_INIT_FAILED' });
       return;
     }
 
@@ -196,7 +212,7 @@ async function startServer() {
       return;
     }
 
-    const walletRow = walletResult.data;
+    const walletRow = walletResult.data || walletData;
     const balance = {
       totalBalance: Number(walletRow?.balance_minor ?? 0) / 100,
       todaysEarnings: (earningsResult.data || [])
