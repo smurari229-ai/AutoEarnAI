@@ -302,6 +302,17 @@ async function startServer() {
     return res.json({ earnings: data || [] });
   });
 
+  app.post('/api/ai/usage', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const { data, error } = await client.rpc('increment_ai_usage');
+    if (error) return res.status(500).json({ error: 'Unable to update AI usage', code: 'AI_USAGE_FAILED' });
+    return res.json({ usage: data });
+  });
+
   // --- AI AUTONOMOUS RUNNER & CHANNELS ---
   app.post('/api/ai/auto-cycle', async (req: Request, res: Response) => {
     const { activeChannels, riskLevel } = req.body;
