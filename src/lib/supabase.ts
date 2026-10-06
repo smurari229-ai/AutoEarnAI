@@ -12,8 +12,8 @@ export const supabase = createClient(
   supabasePublishableKey || 'missing-publishable-key',
   {
     auth: {
-      persistSession: true,
-      autoRefreshToken: true,
+      persistSession: false,
+      autoRefreshToken: false,
       detectSessionInUrl: true,
     },
   },
