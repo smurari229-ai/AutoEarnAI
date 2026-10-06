@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { getAuthenticatedUser, getUserScopedClient } from './server/supabase';
 
 dotenv.config();
 
@@ -157,231 +158,98 @@ async function startServer() {
 
   app.use(express.json());
 
-  // --- AUTH ENDPOINTS (OTP Based) ---
-  app.post('/api/auth/send-otp', (req: Request, res: Response) => {
-    const { phoneOrEmail } = req.body;
-    if (!phoneOrEmail || typeof phoneOrEmail !== 'string') {
-      res.status(400).json({ error: 'Valid phone number or email is required' });
-      return;
-    }
-
-    // Generate 6 digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
-
-    otpStore.set(phoneOrEmail.trim(), { phoneOrEmail: phoneOrEmail.trim(), otp, expiresAt });
-
-    console.log(`[AUTH] Generated OTP for ${phoneOrEmail}: ${otp}`);
-
-    // Return success along with test OTP for seamless demo testing
-    res.json({
-      success: true,
-      message: `OTP sent successfully to ${phoneOrEmail}`,
-      testOtp: otp, // For rapid testing & demo convenience
-      expiresInSeconds: 300
+  // --- AUTH ENDPOINTS ---
+  // Authentication is owned by Supabase Auth. Legacy demo OTP endpoints are disabled.
+  app.post('/api/auth/send-otp', (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Legacy OTP endpoint disabled. Use Supabase Auth from the client.',
+      code: 'LEGACY_AUTH_DISABLED'
     });
   });
 
-  app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
-    const { phoneOrEmail, otp, name } = req.body;
-    if (!phoneOrEmail || !otp) {
-      res.status(400).json({ error: 'Phone/Email and OTP code are required' });
-      return;
-    }
-
-    const stored = otpStore.get(phoneOrEmail.trim());
-
-    // Allow static demo OTP "123456" as universal sandbox code
-    const isMasterCode = otp === '123456' || otp === '999999';
-    const isValid = isMasterCode || (stored && stored.otp === otp && Date.now() < stored.expiresAt);
-
-    if (!isValid) {
-      res.status(400).json({ error: 'Invalid or expired OTP. Try 123456 for instant demo access.' });
-      return;
-    }
-
-    // OTP verified successfully
-    otpStore.delete(phoneOrEmail.trim());
-
-    const user = {
-      id: 'USR-' + Math.random().toString(36).substring(2, 9).toUpperCase(),
-      phoneNumber: phoneOrEmail.includes('@') ? '' : phoneOrEmail,
-      email: phoneOrEmail.includes('@') ? phoneOrEmail : `${phoneOrEmail.replace(/\D/g, '')}@autoearner.ai`,
-      name: name || (phoneOrEmail.includes('@') ? phoneOrEmail.split('@')[0] : `Trader_${phoneOrEmail.slice(-4)}`),
-      isVerified: true,
-      kycStatus: 'verified',
-      createdAt: Date.now()
-    };
-
-    const token = 'TOKEN_' + Buffer.from(JSON.stringify(user)).toString('base64');
-
-    res.json({
-      success: true,
-      message: 'Login successful via secure OTP verification',
-      user,
-      token
+  app.post('/api/auth/verify-otp', (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Legacy OTP endpoint disabled. Use Supabase Auth from the client.',
+      code: 'LEGACY_AUTH_DISABLED'
     });
   });
 
   // --- WALLET & PAYMENT GATEWAY ENDPOINTS ---
-  app.get('/api/wallet/data', (req: Request, res: Response) => {
-    res.json({
-      balance: userBalance,
-      transactions: transactionsHistory,
-      logs: liveLogs
+  app.get('/api/wallet/data', async (req: Request, res: Response) => {
+    const user = await getAuthenticatedUser(req);
+    const client = getUserScopedClient(req);
+
+    if (!user || !client) {
+      res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+      return;
+    }
+
+    const [walletResult, transactionsResult, earningsResult] = await Promise.all([
+      client.from('wallets').select('currency,balance_minor,reserved_minor').eq('user_id', user.id).maybeSingle(),
+      client.from('wallet_transactions').select('id,type,amount_minor,currency,status,provider,provider_reference,metadata,created_at').eq('user_id', user.id).order('created_at', { ascending: false }).limit(50),
+      client.from('earnings').select('id,channel,status,amount_minor,currency,provider,provider_reference,metadata,created_at').eq('user_id', user.id).order('created_at', { ascending: false }).limit(50),
+    ]);
+
+    if (walletResult.error || transactionsResult.error || earningsResult.error) {
+      console.error('[WALLET] Supabase read failed', walletResult.error || transactionsResult.error || earningsResult.error);
+      res.status(500).json({ error: 'Unable to load wallet data', code: 'WALLET_READ_FAILED' });
+      return;
+    }
+
+    const walletRow = walletResult.data;
+    const balance = {
+      totalBalance: Number(walletRow?.balance_minor ?? 0) / 100,
+      todaysEarnings: (earningsResult.data || [])
+        .filter((e: any) => e.status === 'credited' && new Date(e.created_at).toDateString() === new Date().toDateString())
+        .reduce((sum: number, e: any) => sum + Number(e.amount_minor || 0), 0) / 100,
+      totalWithdrawn: Math.abs((transactionsResult.data || [])
+        .filter((t: any) => t.type === 'withdrawal' && t.status === 'completed')
+        .reduce((sum: number, t: any) => sum + Number(t.amount_minor || 0), 0)) / 100,
+      totalDeposited: (transactionsResult.data || [])
+        .filter((t: any) => t.type === 'deposit' && t.status === 'completed')
+        .reduce((sum: number, t: any) => sum + Number(t.amount_minor || 0), 0) / 100,
+      lockedInTrades: Number(walletRow?.reserved_minor ?? 0) / 100,
+      currency: '₹',
+    };
+
+    const transactions = (transactionsResult.data || []).map((t: any) => ({
+      id: t.id,
+      type: t.type === 'earning' ? 'ai_earning' : t.type,
+      title: t.metadata?.title || `${t.type} transaction`,
+      amount: Math.abs(Number(t.amount_minor || 0)) / 100,
+      currency: '₹',
+      timestamp: new Date(t.created_at).getTime(),
+      status: t.status,
+      method: t.provider || undefined,
+      referenceId: t.provider_reference || t.id,
+      notes: t.metadata?.notes,
+    }));
+
+    res.json({ balance, transactions, logs: [] });
+  });
+
+  // Real payment integration is intentionally blocked until a verified provider/webhook is configured.
+  app.post('/api/wallet/deposit', (_req: Request, res: Response) => {
+    res.status(503).json({
+      error: 'Deposit provider is not configured. No balance was changed.',
+      code: 'PAYMENT_PROVIDER_NOT_CONFIGURED'
     });
   });
 
-  // Deposit Gateway (UPI, Cards, NetBanking, Crypto)
-  app.post('/api/wallet/deposit', (req: Request, res: Response) => {
-    const { amount, method, gatewayRef, upiId, cardLast4 } = req.body;
-    const numAmount = parseFloat(amount);
-
-    if (isNaN(numAmount) || numAmount <= 0) {
-      res.status(400).json({ error: 'Please enter a valid deposit amount.' });
-      return;
-    }
-
-    if (numAmount < 100) {
-      res.status(400).json({ error: 'Minimum deposit amount is ₹100.' });
-      return;
-    }
-
-    const txnId = 'DEP-' + Math.floor(100000 + Math.random() * 900000);
-    const reference = gatewayRef || 'UPI-' + Date.now().toString().slice(-8);
-
-    userBalance.totalBalance += numAmount;
-    userBalance.totalDeposited += numAmount;
-
-    const newTxn = {
-      id: txnId,
-      type: 'deposit',
-      title: `Deposit via ${method || 'Instant UPI Gateway'}`,
-      amount: numAmount,
-      currency: '₹',
-      timestamp: Date.now(),
-      status: 'completed',
-      method: method || 'UPI Gateway',
-      referenceId: reference,
-      notes: upiId ? `Paid from UPI VPA: ${upiId}` : cardLast4 ? `Card ending in ****${cardLast4}` : 'Real-time Gateway Confirmation'
-    };
-
-    transactionsHistory.unshift(newTxn);
-
-    const logEntry = {
-      id: 'LOG-' + Date.now(),
-      timestamp: Date.now(),
-      channel: 'system',
-      level: 'success',
-      message: `Deposit of ₹${numAmount.toLocaleString('en-IN')} confirmed via ${method || 'UPI Gateway'}. Available working capital updated.`,
-      profitEarned: 0
-    };
-    liveLogs.unshift(logEntry);
-
-    res.json({
-      success: true,
-      message: `₹${numAmount.toLocaleString('en-IN')} deposited successfully into active wallet.`,
-      transaction: newTxn,
-      updatedBalance: userBalance
+  // Real payout integration is intentionally blocked until a verified provider is configured.
+  app.post('/api/wallet/withdraw', (_req: Request, res: Response) => {
+    res.status(503).json({
+      error: 'Withdrawal provider is not configured. No funds were deducted.',
+      code: 'PAYOUT_PROVIDER_NOT_CONFIGURED'
     });
   });
 
-  // Withdrawal Gateway (Bank IMPS/NEFT, UPI VPA, Crypto)
-  app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
-    const { amount, method, destination, accountHolder, ifscCode } = req.body;
-    const numAmount = parseFloat(amount);
-
-    if (isNaN(numAmount) || numAmount <= 0) {
-      res.status(400).json({ error: 'Please enter a valid withdrawal amount.' });
-      return;
-    }
-
-    if (numAmount > userBalance.totalBalance) {
-      res.status(400).json({ error: `Insufficient wallet balance. You have ₹${userBalance.totalBalance.toFixed(2)} available.` });
-      return;
-    }
-
-    if (numAmount < 500) {
-      res.status(400).json({ error: 'Minimum payout withdrawal threshold is ₹500.' });
-      return;
-    }
-
-    // Deduct balance
-    userBalance.totalBalance -= numAmount;
-    userBalance.totalWithdrawn += numAmount;
-
-    const payoutTxnId = 'WTH-' + Math.floor(100000 + Math.random() * 900000);
-    const utrNumber = 'UTR-' + Date.now().toString().slice(-9);
-
-    const newTxn = {
-      id: payoutTxnId,
-      type: 'withdrawal',
-      title: `Payout Withdrawal to ${method === 'upi' ? 'UPI ID' : 'Bank Account'}`,
-      amount: numAmount,
-      currency: '₹',
-      timestamp: Date.now(),
-      status: 'completed',
-      method: method === 'upi' ? `Instant UPI (${destination})` : `IMPS Direct Bank (${destination})`,
-      referenceId: utrNumber,
-      notes: method === 'upi' ? `Transferred instantly to UPI ID: ${destination}` : `Account: ${destination} | IFSC: ${ifscCode || 'HDFC0001234'} | Beneficiary: ${accountHolder || 'User'}`
-    };
-
-    transactionsHistory.unshift(newTxn);
-
-    const logEntry = {
-      id: 'LOG-' + Date.now(),
-      timestamp: Date.now(),
-      channel: 'system',
-      level: 'warning',
-      message: `Withdrawal of ₹${numAmount.toLocaleString('en-IN')} disbursed via ${method === 'upi' ? 'Instant UPI' : 'IMPS Bank Wire'}. UTR: ${utrNumber}.`,
-      profitEarned: 0
-    };
-    liveLogs.unshift(logEntry);
-
-    res.json({
-      success: true,
-      message: `Withdrawal of ₹${numAmount.toLocaleString('en-IN')} processed successfully. Funds disbursed.`,
-      transaction: newTxn,
-      updatedBalance: userBalance
+  // Demo capital reset is disabled; financial state must never be reset from the browser.
+  app.post('/api/wallet/reset', (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Demo wallet reset is disabled in production mode.',
+      code: 'DEMO_RESET_DISABLED'
     });
-  });
-
-  // Reset demo data
-  app.post('/api/wallet/reset', (req: Request, res: Response) => {
-    userBalance = {
-      totalBalance: 50000.00,
-      todaysEarnings: 0,
-      totalWithdrawn: 0,
-      totalDeposited: 50000.00,
-      lockedInTrades: 0,
-      currency: '₹',
-    };
-    transactionsHistory = [
-      {
-        id: 'TXN-INIT-1',
-        type: 'deposit',
-        title: 'Initial Trading & Operation Balance',
-        amount: 50000,
-        currency: '₹',
-        timestamp: Date.now(),
-        status: 'completed',
-        method: 'Direct Working Capital',
-        referenceId: 'INIT-CAP-001',
-        notes: 'Initial sandbox balance allocated'
-      }
-    ];
-    liveLogs = [
-      {
-        id: 'LOG-INIT',
-        timestamp: Date.now(),
-        channel: 'system',
-        level: 'info',
-        message: 'AI Multi-Channel Earning System initialized with ₹50,000 capital.',
-        profitEarned: 0
-      }
-    ];
-
-    res.json({ success: true, balance: userBalance, transactions: transactionsHistory, logs: liveLogs });
   });
 
   // --- AI AUTONOMOUS RUNNER & CHANNELS ---
