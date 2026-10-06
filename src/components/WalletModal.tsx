@@ -141,8 +141,9 @@ export const WalletModal: React.FC<WalletModalProps> = ({
       return;
     }
 
-    if (amountNum > wallet.totalBalance) {
-      setWithdrawError(`Insufficient balance. Maximum withdrawable is ₹${wallet.totalBalance.toFixed(2)}`);
+    const availableBalance = Math.max(0, wallet.totalBalance - wallet.lockedInTrades);
+    if (amountNum > availableBalance) {
+      setWithdrawError(`Insufficient available balance. Maximum withdrawable is ₹${availableBalance.toFixed(2)}`;
       return;
     }
 
@@ -513,7 +514,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                     Enter Payout Amount (INR)
                   </label>
                   <span className="text-[11px] text-slate-400">
-                    Max Available: <strong className="text-emerald-400">₹{wallet.totalBalance.toFixed(2)}</strong>
+                    Available: <strong className="text-emerald-400">₹{Math.max(0, wallet.totalBalance - wallet.lockedInTrades).toFixed(2)}</strong>
                   </span>
                 </div>
                 <div className="relative">
@@ -527,7 +528,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                   />
                   <button
                     type="button"
-                    onClick={() => setWithdrawAmount(wallet.totalBalance.toString())}
+                    onClick={() => setWithdrawAmount(Math.max(0, wallet.totalBalance - wallet.lockedInTrades).toString())}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-bold rounded-lg transition-colors"
                   >
                     MAX
