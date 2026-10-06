@@ -216,6 +216,49 @@ async function startServer() {
     });
   });
 
+  // Creates only a user-owned withdrawal request. Reservation and payout require trusted execution.
+  app.post('/api/wallet/withdraw-request', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const amountMinor = Number(req.body?.amountMinor);
+    const method = String(req.body?.method || '').trim().toLowerCase();
+    const destination = req.body?.destination && typeof req.body.destination === 'object' ? req.body.destination : {};
+    const idempotencyKey = String(req.header('idempotency-key') || req.body?.idempotencyKey || '').trim();
+
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+      return res.status(400).json({ error: 'Amount must be a positive integer minor-unit value', code: 'INVALID_WITHDRAWAL_AMOUNT' });
+    }
+    if (!['upi', 'bank', 'crypto'].includes(method)) {
+      return res.status(400).json({ error: 'Unsupported withdrawal method', code: 'INVALID_WITHDRAWAL_METHOD' });
+    }
+    if (idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+      return res.status(400).json({ error: 'A valid idempotency key is required', code: 'INVALID_IDEMPOTENCY_KEY' });
+    }
+
+    const { data, error } = await client.from('withdrawal_requests').insert({
+      user_id: user.id,
+      amount_minor: amountMinor,
+      currency: 'INR',
+      method,
+      destination,
+      status: 'requested',
+      idempotency_key: idempotencyKey
+    }).select('id,amount_minor,currency,method,status,idempotency_key,created_at').single();
+
+    if (error) {
+      const duplicate = String(error.message || '').toLowerCase().includes('duplicate');
+      return res.status(duplicate ? 409 : 500).json({
+        error: duplicate ? 'Duplicate withdrawal request' : 'Unable to create withdrawal request',
+        code: duplicate ? 'WITHDRAWAL_REQUEST_DUPLICATE' : 'WITHDRAWAL_REQUEST_FAILED'
+      });
+    }
+
+    return res.status(201).json({ request: data, status: 'requested', payout: null });
+  });
+
   // Real payout integration is intentionally blocked until a verified provider is configured.
   app.post('/api/wallet/withdraw', (_req: Request, res: Response) => {
     res.status(503).json({
