@@ -37,17 +37,11 @@ import {
   ChannelType 
 } from './types';
 import confetti from 'canvas-confetti';
+import { supabase } from './lib/supabase';
 
 export default function App() {
   // Authentication State
-  const [user, setUser] = useState<UserProfile | null>(() => {
-    try {
-      const stored = localStorage.getItem('autoearner_user');
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [user, setUser] = useState<UserProfile | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   // Active Workspace Portal
@@ -91,7 +85,12 @@ export default function App() {
   // Fetch initial state from server
   const fetchWalletData = async () => {
     try {
-      const res = await fetch('/api/wallet/data');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+
+      const res = await fetch('/api/wallet/data', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
       if (res.ok) {
         const data = await res.json();
         if (data.balance) {
@@ -110,7 +109,48 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchWalletData();
+    let mounted = true;
+    const syncAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (!session?.user) {
+        setUser(null);
+        return;
+      }
+      const authUser = session.user;
+      setUser({
+        id: authUser.id,
+        phoneNumber: authUser.phone ?? '',
+        email: authUser.email ?? undefined,
+        name: (authUser.user_metadata?.full_name as string | undefined) || authUser.email?.split('@')[0] || 'AutoEarn User',
+        createdAt: new Date(authUser.created_at).getTime(),
+        isVerified: true,
+        kycStatus: 'unverified',
+      });
+      void fetchWalletData();
+    };
+    void syncAuth();
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session?.user) {
+        setUser(null);
+        return;
+      }
+      const authUser = session.user;
+      setUser({
+        id: authUser.id,
+        phoneNumber: authUser.phone ?? '',
+        email: authUser.email ?? undefined,
+        name: (authUser.user_metadata?.full_name as string | undefined) || authUser.email?.split('@')[0] || 'AutoEarn User',
+        createdAt: new Date(authUser.created_at).getTime(),
+        isVerified: true,
+        kycStatus: 'unverified',
+      });
+      void fetchWalletData();
+    });
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   // Autonomous Background Engine
@@ -182,16 +222,14 @@ export default function App() {
   }, [isAutoPilotActive, settings.frequencySeconds, settings.activeChannels, settings.riskLevel]);
 
   // Auth Handlers
-  const handleLoginSuccess = (newUser: UserProfile, token: string) => {
+  const handleLoginSuccess = (newUser: UserProfile, _token: string) => {
     setUser(newUser);
-    localStorage.setItem('autoearner_user', JSON.stringify(newUser));
-    localStorage.setItem('autoearner_token', token);
+    void fetchWalletData();
   };
 
   const handleLogout = () => {
+    void supabase.auth.signOut();
     setUser(null);
-    localStorage.removeItem('autoearner_user');
-    localStorage.removeItem('autoearner_token');
   };
 
   // Wallet Handlers
