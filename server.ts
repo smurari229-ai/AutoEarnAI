@@ -216,8 +216,34 @@ async function startServer() {
     return res.json({ usage: data });
   });
 
+  async function requireAiUsage(req: Request, res: Response) {
+    const user = await requireUser(req, res);
+    if (!user) return null;
+
+    const client = getUserScopedClient(req);
+    if (!client) {
+      res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+      return null;
+    }
+
+    const { data, error } = await client.rpc('increment_ai_usage');
+    if (error) {
+      const isLimit = String(error.message || '').includes('AI_DAILY_LIMIT_REACHED');
+      res.status(isLimit ? 429 : 500).json({
+        error: isLimit ? 'Daily AI limit reached' : 'Unable to update AI usage',
+        code: isLimit ? 'AI_DAILY_LIMIT_REACHED' : 'AI_USAGE_FAILED'
+      });
+      return null;
+    }
+
+    return { user, usage: data };
+  }
+
   // --- AI AUTONOMOUS RUNNER & CHANNELS ---
   app.post('/api/ai/auto-cycle', async (req: Request, res: Response) => {
+    const aiContext = await requireAiUsage(req, res);
+    if (!aiContext) return;
+
     const { activeChannels, riskLevel } = req.body;
 
     const channels: string[] = activeChannels || ['youtube', 'social', 'stock_market', 'freelance', 'news'];
@@ -356,8 +382,8 @@ async function startServer() {
         profitEarned: 0,
         metadata: { ...itemData, simulatedProfit: profitGenerated, status: 'simulation' }
       };
-      liveLogs.unshift(log);
-      if (liveLogs.length > 50) liveLogs = liveLogs.slice(0, 50);
+      // Do not persist simulated financial activity as server-side mutable state.
+      // Verified earnings belong in Supabase and must come from a supported provider.
 
       res.json({
         success: true,
@@ -378,6 +404,9 @@ async function startServer() {
 
   // Custom AI Action Generator (On-Demand with Enhanced AI Brain)
   app.post('/api/ai/custom-task', async (req: Request, res: Response) => {
+    const aiContext = await requireAiUsage(req, res);
+    if (!aiContext) return;
+
     const { channel, prompt, brainMode } = req.body;
 
     try {
