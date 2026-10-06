@@ -153,7 +153,7 @@ export default function App() {
     };
   }, []);
 
-  // Autonomous Background Engine
+  // AI content/strategy simulation engine
   const runAutoCycle = async () => {
     if (isProcessingCycle) return;
     setIsProcessingCycle(true);
@@ -191,9 +191,6 @@ export default function App() {
             profitEarned: 0,
             metadata: { status: 'simulation', output: data.output },
           }, ...prev.slice(0, 49)]);
-        }
-        if (data.log) {
-          setLogs(prev => [data.log, ...prev.slice(0, 49)]);
         }
       }
     } catch (err) {
