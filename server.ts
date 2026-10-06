@@ -259,44 +259,46 @@ async function startServer() {
   app.post('/api/payment/order', async (req: Request, res: Response) => {
     const user = await requireUser(req, res);
     if (!user) return;
-    const client = getUserScopedClient(req);
-    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
 
     const amount = Number(req.body?.amount);
     const amountMinor = Math.round(amount * 100);
     const currency = String(req.body?.currency || 'INR').toUpperCase();
-    const provider = String(req.body?.provider || '').trim();
+    const provider = String(req.body?.provider || 'razorpay').trim().toLowerCase();
     const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
 
     if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || currency !== 'INR') {
       return res.status(400).json({ error: 'Invalid amount or currency', code: 'INVALID_PAYMENT_ORDER' });
     }
+    if (provider !== 'razorpay') {
+      return res.status(400).json({ error: 'Only the verified Razorpay adapter is supported', code: 'UNSUPPORTED_PAYMENT_PROVIDER' });
+    }
     if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
       return res.status(400).json({ error: 'Valid idempotency key is required', code: 'INVALID_IDEMPOTENCY_KEY' });
     }
-    if (!provider) {
-      return res.status(503).json({ error: 'Payment provider is not configured. No payment was created.', code: 'PAYMENT_PROVIDER_NOT_CONFIGURED' });
+
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+    const authorization = req.header('authorization');
+    if (!supabaseUrl || !publishableKey || !authorization) {
+      return res.status(503).json({ error: 'Trusted payment execution is not configured', code: 'PAYMENT_EXECUTOR_NOT_CONFIGURED' });
     }
 
-    const { data, error } = await client.from('payment_orders').insert({
-      user_id: user.id,
-      amount_minor: amountMinor,
-      currency,
-      status: 'pending',
-      provider,
-      idempotency_key: idempotencyKey,
-      metadata: { source: 'api/payment/order' }
-    }).select('id,amount_minor,currency,status,provider,idempotency_key,created_at').single();
+    const edgeResponse = await fetch(`${supabaseUrl}/functions/v1/create-razorpay-order`, {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+        apikey: publishableKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ amountMinor, currency, idempotencyKey }),
+    });
 
-    if (error) {
-      const duplicate = String(error.message || '').toLowerCase().includes('duplicate');
-      return res.status(duplicate ? 409 : 500).json({
-        error: duplicate ? 'Duplicate payment order' : 'Unable to create payment order',
-        code: duplicate ? 'PAYMENT_ORDER_DUPLICATE' : 'PAYMENT_ORDER_CREATE_FAILED'
-      });
-    }
+    const payload = await edgeResponse.json().catch(() => ({
+      error: 'Payment executor returned an invalid response',
+      code: 'PAYMENT_EXECUTOR_INVALID_RESPONSE',
+    }));
 
-    return res.status(201).json({ order: data, payment: null, status: 'pending' });
+    return res.status(edgeResponse.status).json(payload);
   });
 
   app.post('/api/webhooks/:provider', async (req: Request, res: Response) => {
