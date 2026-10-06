@@ -1,9 +1,10 @@
 FROM node:22-alpine AS backend-build
 WORKDIR /app/backend
-COPY backend/package.json backend/package-lock.json* ./
+COPY backend/package.json ./
 RUN npm install
 COPY backend ./
 RUN npx prisma generate && npm run build
+
 FROM node:22-alpine AS runtime
 WORKDIR /app
 COPY --from=backend-build /app/backend /app/backend
