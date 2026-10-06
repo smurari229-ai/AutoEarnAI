@@ -1,1 +1,1 @@
-import{app}from"./app.js";import{env}from"./config/env.js";import{scheduleSync}from"./jobs/syncQueue.js";await scheduleSync();app.listen(env.PORT,()=>console.log("EarnPilot API listening on "+env.PORT))
+import{app}from"./app.js";import{env}from"./config/env.js";import{scheduleSync}from"./jobs/syncQueue.js";await scheduleSync();const server=app.listen(env.PORT,()=>console.log("EarnPilot API listening on "+env.PORT));const shutdown=async()=>{server.close(()=>process.exit(0))};process.on("SIGTERM",shutdown);process.on("SIGINT",shutdown);
