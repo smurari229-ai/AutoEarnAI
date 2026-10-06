@@ -268,6 +268,40 @@ async function startServer() {
     });
   });
 
+  app.get('/api/wallet/transactions', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const { data, error } = await client
+      .from('wallet_transactions')
+      .select('id,type,amount_minor,currency,status,provider,provider_reference,metadata,created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) return res.status(500).json({ error: 'Unable to load transactions', code: 'TRANSACTIONS_READ_FAILED' });
+    return res.json({ transactions: data || [] });
+  });
+
+  app.get('/api/earnings', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const { data, error } = await client
+      .from('earnings')
+      .select('id,channel,status,amount_minor,currency,provider,provider_reference,metadata,created_at,verified_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) return res.status(500).json({ error: 'Unable to load earnings', code: 'EARNINGS_READ_FAILED' });
+    return res.json({ earnings: data || [] });
+  });
+
   // --- AI AUTONOMOUS RUNNER & CHANNELS ---
   app.post('/api/ai/auto-cycle', async (req: Request, res: Response) => {
     const { activeChannels, riskLevel } = req.body;
