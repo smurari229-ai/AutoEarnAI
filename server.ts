@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
-import { getAuthenticatedUser, getUserScopedClient } from './server/supabase';
+import { getAuthenticatedUser, getSupabaseClient, getUserScopedClient } from './server/supabase';
 
 dotenv.config();
 
@@ -62,22 +62,103 @@ async function startServer() {
   app.use(express.json());
 
   // --- AUTH ENDPOINTS ---
-  // Authentication is owned by Supabase Auth. Legacy demo OTP endpoints are disabled.
-  app.post('/api/auth/send-otp', (_req: Request, res: Response) => {
-    res.status(410).json({
-      error: 'Legacy OTP endpoint disabled. Use Supabase Auth from the client.',
-      code: 'LEGACY_AUTH_DISABLED'
+  // OTP delivery/verification is delegated to Supabase Auth. AutoEarnAI never returns an OTP.
+  const authRate = new Map<string, { count: number; resetAt: number }>();
+  const checkRateLimit = (key: string, max: number, windowMs: number): boolean => {
+    const now = Date.now();
+    const current = authRate.get(key);
+    if (!current || current.resetAt <= now) {
+      authRate.set(key, { count: 1, resetAt: now + windowMs });
+      return true;
+    }
+    if (current.count >= max) return false;
+    current.count += 1;
+    return true;
+  };
+
+  const clientIp = (req: Request) => req.ip || req.socket.remoteAddress || 'unknown';
+  const normalizePhone = (value: string) => {
+    const digits = value.replace(/\\D/g, '');
+    if (digits.length === 10) return `+91${digits}`;
+    return value.trim();
+  };
+
+  app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
+    const type = String(req.body?.type || '').trim().toLowerCase();
+    const identifier = String(req.body?.identifier || '').trim();
+    if (!['email', 'phone'].includes(type) || !identifier) {
+      return res.status(400).json({ error: 'Valid email or phone is required', code: 'INVALID_AUTH_INPUT' });
+    }
+    const normalized = type === 'phone' ? normalizePhone(identifier) : identifier.toLowerCase();
+    const key = `otp-send:${clientIp(req)}:${type}:${normalized}`;
+    if (!checkRateLimit(key, 5, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many OTP requests. Try again later.', code: 'OTP_RATE_LIMITED' });
+    }
+
+    const client = getSupabaseClient();
+    if (!client) return res.status(503).json({ error: 'Authentication provider is not configured', code: 'AUTH_PROVIDER_NOT_CONFIGURED' });
+
+    const credentials = type === 'email' ? { email: normalized } : { phone: normalized };
+    const { error } = await client.auth.signInWithOtp({
+      ...credentials,
+      options: { shouldCreateUser: true, data: { full_name: String(req.body?.name || '').trim().slice(0, 120) || undefined } }
     });
+    if (error) return res.status(502).json({ error: 'Unable to send verification code', code: 'OTP_SEND_FAILED' });
+    return res.json({ success: true, message: 'Verification code sent.' });
   });
 
-  app.post('/api/auth/verify-otp', (_req: Request, res: Response) => {
-    res.status(410).json({
-      error: 'Legacy OTP endpoint disabled. Use Supabase Auth from the client.',
-      code: 'LEGACY_AUTH_DISABLED'
+  app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
+    const type = String(req.body?.type || '').trim().toLowerCase();
+    const identifier = String(req.body?.identifier || '').trim();
+    const token = String(req.body?.token || '').trim();
+    if (!['email', 'phone'].includes(type) || !identifier || !/^\\d{6}$/.test(token)) {
+      return res.status(400).json({ error: 'Valid identifier and 6-digit verification code are required', code: 'INVALID_AUTH_INPUT' });
+    }
+    const normalized = type === 'phone' ? normalizePhone(identifier) : identifier.toLowerCase();
+    const key = `otp-verify:${clientIp(req)}:${type}:${normalized}`;
+    if (!checkRateLimit(key, 10, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many verification attempts. Try again later.', code: 'OTP_VERIFY_RATE_LIMITED' });
+    }
+
+    const client = getSupabaseClient();
+    if (!client) return res.status(503).json({ error: 'Authentication provider is not configured', code: 'AUTH_PROVIDER_NOT_CONFIGURED' });
+
+    const verifyInput = type === 'email'
+      ? { email: normalized, token, type: 'email' as const }
+      : { phone: normalized, token, type: 'sms' as const };
+    const { data, error } = await client.auth.verifyOtp(verifyInput);
+    if (error || !data.user || !data.session) {
+      return res.status(401).json({ error: 'Invalid or expired verification code', code: 'OTP_INVALID_OR_EXPIRED' });
+    }
+
+    return res.json({
+      success: true,
+      user: data.user,
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        expires_at: data.session.expires_at,
+        expires_in: data.session.expires_in,
+        token_type: data.session.token_type,
+      }
     });
   });
 
   // --- WALLET & PAYMENT GATEWAY ENDPOINTS ---
+  const financialRate = new Map<string, { count: number; resetAt: number }>();
+  const checkFinancialRate = (req: Request, limit = 30, windowMs = 60_000) => {
+    const key = `${clientIp(req)}:${req.path}`;
+    const now = Date.now();
+    const current = financialRate.get(key);
+    if (!current || current.resetAt <= now) { financialRate.set(key, { count: 1, resetAt: now + windowMs }); return true; }
+    if (current.count >= limit) return false;
+    current.count += 1;
+    return true;
+  };
+  app.use('/api/wallet', (req: Request, res: Response, next) => {
+    if (!checkFinancialRate(req, 30, 60_000)) return res.status(429).json({ error: 'Too many wallet requests. Try again later.', code: 'WALLET_RATE_LIMITED' });
+    next();
+  });
   async function requireUser(req: Request, res: Response) {
     const user = await getAuthenticatedUser(req);
     if (!user) {
@@ -395,176 +476,48 @@ async function startServer() {
     }
   });
 
-  // Custom AI Action Generator (On-Demand with Enhanced AI Brain)
+  // --- AI CONTENT GENERATION ---
+  // This route can generate content/analysis only. It cannot create or claim financial outcomes.
   app.post('/api/ai/custom-task', async (req: Request, res: Response) => {
     const aiContext = await requireAiUsage(req, res);
     if (!aiContext) return;
 
-    const { channel, prompt, brainMode } = req.body;
-
-    try {
-      const mode = brainMode || 'hyper_growth';
-      
-      const systemInstruction = `You are AutoEarn AI's Supreme Neural Intelligence Brain (Operating in ${mode.toUpperCase()} mode).
-You specialize in 5 autonomous monetization verticals:
-1. YouTube Faceless High-CPM Automation: Generates viral 3-second hooks, audience retention pacing, SEO tags, sponsor pitches, and high-paying niche angles ($12+ CPM).
-2. Algorithmic Quantitative Trading: Analyzes multi-timeframe VWAP, 20/50/200 EMA crossovers, RSI divergence, Order Flow imbalances, and strict stop-loss/take-profit risk math.
-3. Freelance & Client Solution Hunter: Formulates Top-Rated winning proposals on Upwork/Fiverr with full executable code snippets (Python/Node/React), edge-case handling, and delivery checklists.
-4. Viral Social Media Matrix: Crafts high-engagement reels, X/Twitter viral threads, and high-converting affiliate copy with psychology-driven CTAs.
-5. News & SEO Media Arbitrage: Writes breaking journalistic financial/tech analysis with high Google Discover CTR headlines and AdSense optimization.
-
-Provide detailed, polished, actionable, and formatted output with clear sections, code or script snippets, and exact revenue estimates.`;
-
-      const userPrompt = `Channel: ${channel || 'general'}. Mode: ${mode}. User Instruction / Goal: ${prompt || 'Generate maximum revenue deliverable'}.
-Deliver a complete, high-value, production-ready output immediately.`;
-
-      const fallbackTextGenerator = () => {
-        if (channel === 'youtube') {
-          return `🎬 YOUTUBE SUPREME AI AUTOMATION ENGINE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 High CPM Title: "Top 7 Autonomous AI Software Earning ₹1,50,000/Month in 2026 (No Face Required)"
-🎯 Target CPM: $11.80 - $18.50 (FinTech & B2B SaaS Niche)
-
-⚡ PSYCHOLOGICAL 3-SECOND HOOK:
-"99% of people are using AI to write basic essays, while a silent 1% built autonomous code agents that deposit ₹5,000 every single morning into their account. In this video, I'm handing you the exact 3 blueprints."
-
-📋 5-PHASE RETENTION SCRIPT OUTLINE:
-1. [0:00 - 1:15] Proof of Concept: Live screen recording showing automated Upwork & YouTube revenue flow.
-2. [1:15 - 3:30] Agent Pipeline #1: Automated Python Web-Scrapers and Data Arbitrage bots.
-3. [3:30 - 5:45] Agent Pipeline #2: High-Volume Faceless Short-Form Content Synthesizer.
-4. [5:45 - 7:30] Agent Pipeline #3: Quantitative VWAP Momentum Scalper alerts.
-5. [7:30 - 9:00] Monetization Bridge: Step-by-step setup + link in pinned comment for free template download.
-
-💡 SPONSORSHIP & AFFILIATE STRATEGY:
-• Pinned Comment Bounty: Notion / Hostinger / TradingView affiliate links.
-• AdSense Yield (50K views @ $12 CPM): ₹49,200
-• Affiliate Conversions (60 sign-ups @ ₹500): ₹30,000
-• Total Projected Yield: ₹79,200 / Video`;
-        }
-
-        if (channel === 'stock_market') {
-          return `📊 QUANTITATIVE NEURAL SCALPING BRAIN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚡ Signal: CONVERGENCE BUY & ACCUMULATE
-📈 Asset: ${prompt ? prompt.slice(0, 30) : 'NIFTY 50 / NVDA / BTC'}
-⏱ Timeframe: 15-Minute & 1-Hour Intraday Momentum
-
-🎯 QUANTITATIVE EXECUTION TARGETS:
-• Primary Entry: Current VWAP Retest Zone
-• Take-Profit 1 (Scalp): +1.65% Gain
-• Take-Profit 2 (Runner): +3.40% Gain
-• Strict Invalidation Stop: -0.70% below 50 EMA baseline
-
-🔍 MULTI-INDICATOR CONFIRMATION:
-1. 20 EMA crossed above 50 EMA with high volume surge (2.8x standard deviation).
-2. RSI bullish divergence formed at 32.4, now accelerating past 54.0.
-3. Institutional Order Block retested with heavy delta absorption in order book.
-
-⚖️ RISK PROTOCOL: Maximum 1.5% portfolio risk per trade with 1:3.2 Risk-to-Reward ratio.`;
-        }
-
-        if (channel === 'freelance') {
-          return `💼 TOP-RATED FREELANCE PROPOSAL & EXECUTABLE SOLUTION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 Target Job: ${prompt ? prompt.slice(0, 50) : 'Build Resilient Python/Node Web Scraper with Automated Error Recovery'}
-
-📝 WINNING CLIENT BID PROPOSAL:
-"Hi there! I specialize in production-grade automation systems with automated proxy rotation, exponential backoffs, and typed database persistence. I have already drafted a resilient working snippet tailored to your specifications and can deliver the full verified repository in under 3 hours."
-
-💻 EXECUTABLE SOLUTION CODE:
-\`\`\`typescript
-import axios from 'axios';
-
-interface ScrapeResult {
-  id: string;
-  timestamp: number;
-  data: Record<string, any>;
-}
-
-export async function executeResilientScraper(targetUrl: string): Promise<ScrapeResult> {
-  const maxRetries = 3;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await axios.get(targetUrl, {
-        timeout: 8000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-      });
-      return {
-        id: 'SCRAPE-' + Date.now(),
-        timestamp: Date.now(),
-        data: res.data
-      };
-    } catch (err: any) {
-      if (attempt === maxRetries) throw new Error(\`Scrape failed after \${maxRetries} attempts: \${err.message}\`);
-      await new Promise(r => setTimeout(r, attempt * 1200));
+    const channel = String(req.body?.channel || 'general').trim().toLowerCase();
+    const prompt = String(req.body?.prompt || '').trim().slice(0, 5000);
+    const allowedChannels = ['youtube', 'social', 'stock_market', 'freelance', 'news', 'general'];
+    if (!allowedChannels.includes(channel) || !prompt) {
+      return res.status(400).json({ success: false, error: 'A valid channel and non-empty prompt are required.', code: 'INVALID_AI_INPUT' });
     }
-  }
-  throw new Error('Scrape cycle terminated');
-}
-\`\`\`
 
-✅ DELIVERY PACKAGE: TypeScript code + Dockerfile + GitHub CI workflow + Video demo.`;
-        }
+    const channelInstructions: Record<string, string> = {
+      youtube: 'Create a YouTube content outline, hook, title ideas, and production checklist. Do not claim views, CPM, AdSense revenue, earnings, sponsors, or results.',
+      social: 'Create social-media content ideas, captions, hooks, and a posting checklist. Do not claim clicks, commissions, affiliate revenue, or results.',
+      stock_market: 'Create educational market-analysis methodology for a hypothetical scenario. Do not provide or imply executed trades, live positions, guaranteed returns, P&L, or profit figures.',
+      freelance: 'Create a freelance proposal, scope, implementation plan, or code outline. Do not claim a real client, job, contract, milestone, payout, or platform earnings.',
+      news: 'Create an editorial research angle, outline, or SEO-safe headline ideas. Do not claim traffic, RPM, AdSense revenue, or monetization results.',
+      general: 'Create useful software, content, research, or productivity guidance. Do not invent financial outcomes or transactions.',
+    };
 
-        if (channel === 'social') {
-          return `🔥 VIRAL SOCIAL REVENUE MATRIX & AFFILIATE CAMPAIGN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📱 Platforms: Instagram Reel + X (Twitter) Mega Thread + LinkedIn Post
-🎯 Campaign Target: High-Converting SaaS & Affiliate Subscriptions
-
-⚡ 2-SECOND VISUAL HOOK:
-"Stop trading 10 hours of manual labor for a flat paycheck. Here is how 1 autonomous AI agent generates ₹4,500/day on autopilot:"
-
-🧵 4-STAGE VIRAL THREAD:
-1. The Problem: Manual work doesn't scale and caps your earning capacity.
-2. The AI Breakthrough: Gemini 2.5/3.7 agents can scrape leads, format deliverables, and close clients.
-3. The Tool Stack: AutoEarn AI Hub + UPI/Stripe instant payout rails.
-4. The Action Plan: Clone the free open-source setup in 5 minutes.
-
-🔗 HIGH-CONVERTING CALL TO ACTION:
-"Drop a comment 'AGENT' below and I will DM you the complete source code & video guide instantly 👇"
-
-🏷 TARGET HASHTAGS:
-#AIAutomation #PassiveIncome #FreelanceHacks #UpworkTopRated #TechTools2026`;
-        }
-
-        return `📰 BREAKING FINTECH & AI ARBITRAGE REPORT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📢 Headline: "${prompt ? prompt.slice(0, 60) : 'Autonomous Sovereign AI Networks Drive Historic Revenue Expansion in 2026'}"
-📊 Monetization: High RPM Display Ads & Financial Sponsorships
-
-🗞 EDITORIAL ANALYSIS:
-The rapid proliferation of self-orchestrating artificial intelligence agents paired with instantaneous payment rails (UPI/IMPS/SEPA) has created an unprecedented economic shift. Independent developers and digital creators now deploy autonomous multi-agent pipelines to scale digital assets globally.
-
-🔑 HIGH-RPM METRICS:
-• Search Impression Velocity: +380% Month-over-Month
-• Average RPM Yield: $14.20 across FinTech & SaaS segments
-• Automated syndication to Google Discover and major news aggregators.`;
-      };
-
-      const resultText = await generateGeminiContentWithRetry(
-        userPrompt,
-        systemInstruction,
-        fallbackTextGenerator
+    try {
+      const output = await generateGeminiContentWithRetry(
+        channelInstructions[channel] + `\\nUser request: ${prompt}`,
+        'You are a safety-first AI content assistant. Generate content, analysis, or suggestions only. Never invent revenue, earnings, balances, payouts, clients, transactions, trades, investment results, views, CPM, RPM, commissions, or other financial evidence. Never present projections as actual results.',
+        () => 'Content draft generated for review. No real-world transaction or financial result is represented.'
       );
 
-      // AI deliverables are not financial proof. Do not credit the wallet from generated content.
-      res.json({
+      return res.json({
         success: true,
         status: 'simulation',
-        output: resultText,
+        simulation: true,
+        output,
         rewardEarned: 0,
-        brainMode: mode,
-        message: 'Deliverable generated. No financial credit was created; verified revenue must be recorded through a supported provider.'
+        financialResult: false,
+        brainMode: 'safe-content',
+        message: 'Content generated. No financial credit, trade, payout, or revenue result was created.'
       });
     } catch (err: any) {
       console.error('Custom task generation failed:', err);
-      res.status(503).json({
-        success: false,
-        status: 'unavailable',
-        error: 'AI generation failed. No financial credit was created.',
-        code: 'AI_GENERATION_FAILED'
-      });
+      return res.status(503).json({ success: false, status: 'unavailable', error: 'AI generation failed. No financial credit was created.', code: 'AI_GENERATION_FAILED', financialResult: false });
     }
   });
 
@@ -585,7 +538,7 @@ The rapid proliferation of self-orchestrating artificial intelligence agents pai
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AI Auto-Earning Multi-Portal Server running on port ${PORT}`);
+    console.log(`AutoEarnAI content and strategy server running on port ${PORT}`);
   });
 }
 
