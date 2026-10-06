@@ -1,0 +1,1 @@
+import{ResponsiveContainer,BarChart,Bar,XAxis,YAxis,Tooltip}from"recharts";export default function RevenueBySource({data}:{data:{source:string,amount:number}[]}){return <div className="h-64"><ResponsiveContainer><BarChart data={data}><XAxis dataKey="source"/><YAxis/><Tooltip/><Bar dataKey="amount"fill="#22d3ee"/></BarChart></ResponsiveContainer></div>}
