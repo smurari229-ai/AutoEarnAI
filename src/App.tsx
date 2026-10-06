@@ -49,11 +49,11 @@ export default function App() {
 
   // Wallet & Ledger State
   const [wallet, setWallet] = useState<WalletState>({
-    totalBalance: 45850.00,
-    todaysEarnings: 3420.50,
-    totalWithdrawn: 12500.00,
-    totalDeposited: 30000.00,
-    lockedInTrades: 8200.00,
+    totalBalance: 0,
+    todaysEarnings: 0,
+    totalWithdrawn: 0,
+    totalDeposited: 0,
+    lockedInTrades: 0,
     currency: '₹',
     transactions: [],
   });
@@ -104,7 +104,7 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.warn('Server offline, using client state', err);
+      console.error('Wallet sync failed; no client-side financial fallback is allowed.', err);
     }
   };
 
@@ -165,9 +165,11 @@ export default function App() {
 
       if (activeChannelsList.length === 0) return;
 
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
       const res = await fetch('/api/ai/auto-cycle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
           activeChannels: activeChannelsList,
           riskLevel: settings.riskLevel,
@@ -234,9 +236,11 @@ export default function App() {
 
   // Wallet Handlers
   const handleDepositSuccess = async (amount: number, method: string, details?: any) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Authentication required');
     const res = await fetch('/api/wallet/deposit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
       body: JSON.stringify({ amount, method, ...details }),
     });
     if (!res.ok) {
@@ -252,9 +256,11 @@ export default function App() {
   };
 
   const handleWithdrawSuccess = async (amount: number, method: string, destination: string, extra?: any) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Authentication required');
     const res = await fetch('/api/wallet/withdraw', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
       body: JSON.stringify({ amount, method, destination, ...extra }),
     });
     if (!res.ok) {
@@ -270,94 +276,26 @@ export default function App() {
   };
 
   const handleResetBalance = async () => {
-    if (!confirm('Are you sure you want to reset working capital to ₹50,000?')) return;
-    const res = await fetch('/api/wallet/reset', { method: 'POST' });
-    if (res.ok) {
-      const data = await res.json();
-      setWallet({
-        ...data.balance,
-        transactions: data.transactions,
-      });
-      setLogs(data.logs);
-      alert('Working capital reset to ₹50,000 successfully.');
-    }
+    throw new Error('Demo wallet reset is disabled. Financial state is controlled by the server ledger.');
   };
 
   // On-demand AI Task Generation in any portal
   const handleGenerateCustomTask = async (channel: string, prompt: string) => {
-    try {
-      const res = await fetch('/api/ai/custom-task', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel, prompt }),
-      });
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error('Authentication required');
 
-      let data: any;
-      if (res.ok) {
-        data = await res.json();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        data = {
-          success: true,
-          output: `[Autonomous AI Engine Executed for ${channel.toUpperCase()}]:\n\n1. Target Strategy: High CPM Monetization & Real-Time Direct Execution.\n2. Asset Created: "${prompt || 'Automated AI Deliverable'}"\n3. Deliverable Status: Completed and verified.\n4. Working Yield: +₹380 credited to balance.`,
-          rewardEarned: 380,
-          updatedBalance: {
-            ...wallet,
-            totalBalance: wallet.totalBalance + 380,
-            todaysEarnings: wallet.todaysEarnings + 380
-          }
-        };
-      }
+    const res = await fetch('/api/ai/custom-task', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ channel, prompt }),
+    });
 
-      if (data.updatedBalance) {
-        setWallet(prev => ({
-          ...data.updatedBalance,
-          transactions: [
-            {
-              id: 'AI-' + Date.now(),
-              type: 'ai_earning',
-              channel: channel as ChannelType,
-              title: `Manual AI Execution: ${channel.toUpperCase()}`,
-              amount: data.rewardEarned || 350,
-              currency: '₹',
-              timestamp: Date.now(),
-              status: 'completed',
-              referenceId: 'CUST-' + Date.now().toString().slice(-6),
-            },
-            ...prev.transactions,
-          ],
-        }));
-      }
-      return data;
-    } catch (netErr) {
-      console.warn('Network issue generating task, using client fallback:', netErr);
-      const reward = 350;
-      setWallet(prev => ({
-        ...prev,
-        totalBalance: prev.totalBalance + reward,
-        todaysEarnings: prev.todaysEarnings + reward,
-        transactions: [
-          {
-            id: 'AI-' + Date.now(),
-            type: 'ai_earning',
-            channel: channel as ChannelType,
-            title: `Manual AI Execution: ${channel.toUpperCase()}`,
-            amount: reward,
-            currency: '₹',
-            timestamp: Date.now(),
-            status: 'completed',
-            referenceId: 'CUST-' + Date.now().toString().slice(-6),
-          },
-          ...prev.transactions,
-        ],
-      }));
-
-      return {
-        success: true,
-        output: `[Autonomous AI Deliverable - ${channel.toUpperCase()}]:\n\n1. Target High CPM Keyword: "Autonomous Enterprise AI Systems 2026"\n2. Execution Strategy: Automated Pipeline & Direct Escrow Milestone.\n3. Output Deliverable: High-converting monetization asset generated.\n4. Revenue Allocated: +₹${reward} credited to wallet.`,
-        rewardEarned: reward
-      };
-    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'AI generation failed');
+    return data;
   };
 
   return (
