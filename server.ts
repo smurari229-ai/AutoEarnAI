@@ -190,6 +190,24 @@ async function startServer() {
     return res.status(201).json({ order: data, payment: null, status: 'pending' });
   });
 
+  app.post('/api/webhooks/:provider', async (req: Request, res: Response) => {
+    const provider = String(req.params.provider || '').trim().toLowerCase();
+    if (!provider) return res.status(400).json({ error: 'Provider is required', code: 'INVALID_PROVIDER' });
+
+    // Provider-specific signature verification MUST be implemented before this endpoint can
+    // mutate payment state. We intentionally reject all unverified webhook traffic.
+    const signature = String(req.header('x-webhook-signature') || '').trim();
+    if (!signature) {
+      return res.status(401).json({ error: 'Webhook signature required', code: 'WEBHOOK_SIGNATURE_REQUIRED' });
+    }
+
+    return res.status(501).json({
+      error: 'Provider webhook verification is not configured. No payment or wallet state was changed.',
+      code: 'WEBHOOK_PROVIDER_NOT_CONFIGURED',
+      provider
+    });
+  });
+
   // Real payment integration is intentionally blocked until a verified provider/webhook is configured.
   app.post('/api/wallet/deposit', (_req: Request, res: Response) => {
     res.status(503).json({
