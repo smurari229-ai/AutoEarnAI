@@ -343,166 +343,55 @@ async function startServer() {
     return { user, usage: data };
   }
 
-  // --- AI AUTONOMOUS RUNNER & CHANNELS ---
+  // --- AI CONTENT / STRATEGY SIMULATION ---
+  // This endpoint never represents real trades, ad revenue, freelance payouts, or wallet earnings.
   app.post('/api/ai/auto-cycle', async (req: Request, res: Response) => {
     const aiContext = await requireAiUsage(req, res);
     if (!aiContext) return;
 
-    const { activeChannels, riskLevel } = req.body;
+    const requestedChannels = Array.isArray(req.body?.activeChannels) ? req.body.activeChannels : [];
+    const allowedChannels = ['youtube', 'social', 'stock_market', 'freelance', 'news'];
+    const channels = requestedChannels.filter((c: unknown): c is string => typeof c === 'string' && allowedChannels.includes(c));
+    const chosenChannel = channels[Math.floor(Math.random() * channels.length)] || 'youtube';
 
-    const channels: string[] = activeChannels || ['youtube', 'social', 'stock_market', 'freelance', 'news'];
-    const chosenChannel = channels[Math.floor(Math.random() * channels.length)];
-
-    let profitGenerated = 0;
-    let actionSummary = '';
-    let itemData: any = {};
+    const prompts: Record<string, string> = {
+      youtube: 'Create a concise YouTube content idea and hook about AI tools. Do not claim views, CPM, AdSense revenue, or earnings.',
+      social: 'Create a concise social-media post idea promoting an AI software workflow. Do not claim clicks, commissions, or earnings.',
+      stock_market: 'Create a concise educational trading-analysis checklist for a hypothetical scenario. Do not claim a real trade, price, position, P&L, or investment result.',
+      freelance: 'Create a concise freelance proposal outline for an AI/software task. Do not claim an Upwork job, client, contract, milestone, or payout exists.',
+      news: 'Create a concise editorial research angle about AI/fintech. Do not claim ad revenue, RPM, traffic, or monetization.',
+    };
 
     try {
-      if (chosenChannel === 'stock_market') {
-        const symbols = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'NVDA', 'BTC/USDT', 'ETH/USDT', 'TATAMOTORS'];
-        const sym = symbols[Math.floor(Math.random() * symbols.length)];
-        const isProfit = Math.random() > 0.15; // 85% high win rate algo
-        const profit = isProfit ? Math.floor(350 + Math.random() * 1250) : -Math.floor(100 + Math.random() * 300);
-        profitGenerated = Math.max(50, profit);
+      const output = await generateGeminiContentWithRetry(
+        prompts[chosenChannel],
+        'You are an AI assistant. Produce content or analysis only. Never invent financial outcomes, transactions, clients, trades, revenue, or monetization evidence.',
+        () => 'Content/strategy draft generated for review. No real-world transaction or earning is represented.'
+      );
 
-        const prompt = `Give a 1-sentence super concise technical algorithmic trading rationale for taking a profitable BUY trade on ${sym} with 2 key technical indicators (e.g., EMA crossover, MACD, Order Flow). Keep it under 25 words.`;
-        const aiRationale = await generateGeminiContentWithRetry(
-          prompt,
-          'You are an algorithmic quantitative trader bot.',
-          () => `Algorithmic Buy triggered on ${sym}: 20 EMA crossed 50 EMA with strong VWAP order flow and RSI momentum (44 -> 58).`
-        );
-
-        itemData = {
-          symbol: sym,
-          type: 'BUY',
-          entryPrice: Math.floor(500 + Math.random() * 3500),
-          pnl: profitGenerated,
-          aiSignalRationale: aiRationale
-        };
-        actionSummary = `Algo Market Bot executed ${sym} trade. Generated +₹${profitGenerated.toFixed(2)} profit.`;
-
-      } else if (chosenChannel === 'youtube') {
-        profitGenerated = Math.floor(280 + Math.random() * 950);
-        const niche = 'AI & Tech Money';
-
-        const prompt = `Generate a viral, high CPM YouTube video title and a 2-sentence monetized script hook about making money with AI or automated tools in 2026. Format: Title | Hook`;
-        const aiText = await generateGeminiContentWithRetry(
-          prompt,
-          'You are a high-CPM YouTube automation producer.',
-          () => `Top 7 Autonomous AI Agents Printing ₹1,00,000/Month in 2026 | What if your computer could find clients, write code, and deposit money into your account 24/7? In this video, we break down the exact automated pipeline you can clone today.`
-        );
-
-        let videoTitle = 'Top 10 High-Paying AI Skills in 2026 (Faceless Automation)';
-        const parts = aiText.split('|');
-        if (parts.length >= 2) {
-          videoTitle = parts[0].trim();
-        } else if (aiText) {
-          videoTitle = aiText.slice(0, 65).trim();
-        }
-
-        itemData = {
-          title: videoTitle,
-          niche,
-          estimatedRevenue: profitGenerated,
-          views: Math.floor(12000 + Math.random() * 45000),
-          cpm: (3.5 + Math.random() * 4.5).toFixed(2)
-        };
-        actionSummary = `YouTube Automation Pipeline published "${videoTitle.slice(0, 45)}...". AdSense & Affiliate revenue: +₹${profitGenerated}.`;
-
-      } else if (chosenChannel === 'freelance') {
-        profitGenerated = Math.floor(450 + Math.random() * 1800);
-
-        const prompt = `Give a realistic freelance job title on Upwork (e.g., Python scraping, Next.js dashboard, AI Bot) and a 1-sentence solution snippet the AI auto-completed. Format: Title | Solution`;
-        const aiText = await generateGeminiContentWithRetry(
-          prompt,
-          'You are an Upwork Top-Rated Plus freelance bot.',
-          () => `Build Scalable Python Playwright Scraper with Dynamic Proxy Rotation | Delivered automated async scraper with exponential backoff and JSON structured output.`
-        );
-
-        let jobTitle = 'Automate Web Scraping & AI Data Pipeline (Python/Node)';
-        let solution = 'Delivered custom Playwright script with proxy rotation and Gemini structured parsing.';
-
-        const parts = aiText.split('|');
-        if (parts.length >= 2) {
-          jobTitle = parts[0].trim();
-          solution = parts[1].trim();
-        } else if (aiText) {
-          jobTitle = aiText.slice(0, 60).trim();
-        }
-
-        itemData = {
-          title: jobTitle,
-          platform: 'Upwork',
-          budget: profitGenerated,
-          solution
-        };
-        actionSummary = `Freelance Auto-Bot won & delivered job: "${jobTitle.slice(0, 40)}...". Milestone payout: +₹${profitGenerated}.`;
-
-      } else if (chosenChannel === 'social') {
-        profitGenerated = Math.floor(180 + Math.random() * 620);
-        const platform = ['Instagram', 'Twitter / X', 'Facebook'][Math.floor(Math.random() * 3)];
-
-        const prompt = `Write a 1-sentence viral hook for ${platform} promoting an AI automation software with an affiliate link. Max 20 words.`;
-        const postHeadline = await generateGeminiContentWithRetry(
-          prompt,
-          'You are a viral growth hacker and affiliate marketer.',
-          () => `99% of creators are still doing manual work. Here is how 1 AI agent automated my entire $2,000/mo income stream.`
-        );
-
-        itemData = {
-          platform,
-          headline: postHeadline,
-          clicks: Math.floor(45 + Math.random() * 120),
-          revenue: profitGenerated
-        };
-        actionSummary = `Social Media Matrix published viral post on ${platform}. Affiliate link commissions: +₹${profitGenerated}.`;
-
-      } else { // news
-        profitGenerated = Math.floor(120 + Math.random() * 480);
-
-        const prompt = `Create a breaking tech/market news headline about AI breakthroughs or financial fintech. Under 15 words.`;
-        const newsHeadline = await generateGeminiContentWithRetry(
-          prompt,
-          'You are a financial tech news wire editor.',
-          () => `India Sovereign AI Framework & Automated Algorithmic Rails Open $10 Billion Market Opportunity`
-        );
-
-        itemData = {
-          headline: newsHeadline,
-          traffic: Math.floor(5000 + Math.random() * 18000),
-          revenue: profitGenerated
-        };
-        actionSummary = `News Arbitrage Portal generated SEO breaking article "${newsHeadline.slice(0, 40)}...". CPM & Display Ads: +₹${profitGenerated}.`;
-      }
-
-      // IMPORTANT: AI output is simulation/strategy output only.
-      // It is never credited to a real wallet without an independently verified earning source.
       const log = {
-        id: 'LOG-' + Date.now(),
+        id: 'SIM-' + Date.now(),
         timestamp: Date.now(),
         channel: chosenChannel,
         level: 'info',
-        message: `Simulation only: ${actionSummary}`,
+        message: 'SIMULATION / DEMO MODE: AI generated content/strategy only. No money was earned, traded, deposited, or withdrawn.',
         profitEarned: 0,
-        metadata: { ...itemData, simulatedProfit: profitGenerated, status: 'simulation' }
+        metadata: { status: 'simulation', financialResult: false }
       };
-      // Do not persist simulated financial activity as server-side mutable state.
-      // Verified earnings belong in Supabase and must come from a supported provider.
 
-      res.json({
+      return res.json({
         success: true,
         simulation: true,
         status: 'simulation',
         channel: chosenChannel,
-        projectedAmount: profitGenerated,
-        summary: actionSummary,
-        itemData,
-        log
+        output,
+        summary: 'SIMULATION / DEMO MODE — AI content/strategy generated only; no financial result.',
+        financialResult: false,
+        log,
       });
-
     } catch (error: any) {
-      console.error('Error in auto-cycle:', error);
-      res.status(500).json({ error: error.message || 'Auto cycle error' });
+      console.error('AI simulation error:', error);
+      return res.status(503).json({ error: 'AI generation unavailable', code: 'AI_GENERATION_FAILED', financialResult: false });
     }
   });
 
