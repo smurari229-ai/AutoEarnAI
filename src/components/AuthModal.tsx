@@ -56,24 +56,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setIsLoading(true);
     try {
-      const credentials = authType === 'email'
-        ? { email: inputVal }
-        : { phone: inputVal };
-
-      const { error: otpError } = await supabase.auth.signInWithOtp({
-        ...credentials,
-        options: {
-          shouldCreateUser: true,
-          data: {
-            full_name: name.trim() || undefined,
-          },
-        },
+      const res = await fetch('/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: authType, identifier: inputVal, name: name.trim() }),
       });
-
-      if (otpError) {
-        throw new Error(otpError.message);
-      }
-
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Unable to send OTP');
       setStep('otp');
       setResendTimer(45);
     } catch (err: any) {
@@ -94,15 +83,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     setIsLoading(true);
     try {
-      const verifyInput = authType === 'email'
-        ? { email: phoneOrEmail.trim(), token: codeToVerify, type: 'email' as const }
-        : { phone: phoneOrEmail.trim(), token: codeToVerify, type: 'sms' as const };
-
-      const { data, error: verifyError } = await supabase.auth.verifyOtp(verifyInput);
-
-      if (verifyError || !data.user || !data.session) {
-        throw new Error(verifyError?.message || 'Invalid or expired OTP');
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: authType, identifier: phoneOrEmail.trim(), token: codeToVerify }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.user || !data.session?.access_token || !data.session?.refresh_token) {
+        throw new Error(data.error || 'Invalid or expired OTP');
       }
+
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      });
+      if (sessionError) throw new Error(sessionError.message);
 
       const user = data.user;
       const appUser: UserProfile = {
@@ -175,7 +170,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </h2>
           <p className="text-xs text-slate-400 mt-1">
             {step === 'input' 
-              ? 'Access real-time AI autonomous earnings, live deposits & instant withdrawals'
+              ? 'Sign in to the AutoEarnAI content and strategy workspace'
               : `6-digit security code sent to ${phoneOrEmail}`}
           </p>
         </div>
@@ -252,21 +247,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
-            {/* Quick Demo Pre-fill */}
-            <div className="flex items-center justify-between text-xs pt-1">
-              <span className="text-slate-400">Quick Test Profile:</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthType('phone');
-                  setPhoneOrEmail('9876543210');
-                  setName('AI Auto Earner');
-                }}
-                className="text-emerald-400 hover:text-emerald-300 font-semibold underline underline-offset-2 flex items-center gap-1"
-              >
-                <Sparkles className="w-3 h-3" /> Auto-fill Demo Phone
-              </button>
-            </div>
+            <p className="text-[11px] text-slate-500">A verification code is sent by the configured Supabase Auth email/SMS provider. AutoEarnAI never displays or returns the code.</p>
 
             {/* Submit Button */}
             <button
