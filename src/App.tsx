@@ -63,10 +63,10 @@ export default function App() {
   const [walletModalInitialTab, setWalletModalInitialTab] = useState<'deposit' | 'withdraw' | 'history'>('deposit');
 
   // Auto-Pilot Engine Settings
-  const [isAutoPilotActive, setIsAutoPilotActive] = useState<boolean>(true);
+  const [isAutoPilotActive, setIsAutoPilotActive] = useState<boolean>(false);
   const [isProcessingCycle, setIsProcessingCycle] = useState<boolean>(false);
   const [settings, setSettings] = useState<AutoPilotSettings>({
-    isEnabled: true,
+    isEnabled: false,
     frequencySeconds: 15,
     activeChannels: {
       youtube: true,
@@ -178,24 +178,19 @@ export default function App() {
 
       if (res.ok) {
         const data = await res.json();
-        if (data.updatedBalance) {
-          setWallet(prev => ({
-            ...data.updatedBalance,
-            transactions: [
-              {
-                id: 'AI-' + Date.now(),
-                type: 'ai_earning',
-                channel: data.channel,
-                title: data.summary,
-                amount: data.profit,
-                currency: '₹',
-                timestamp: Date.now(),
-                status: 'completed',
-                referenceId: 'AUTO-' + Date.now().toString().slice(-6),
-              },
-              ...prev.transactions,
-            ],
-          }));
+        if (data.log) {
+          setLogs(prev => [data.log, ...prev.slice(0, 49)]);
+        }
+        if (data.output) {
+          setLogs(prev => [{
+            id: 'AI-' + Date.now(),
+            timestamp: Date.now(),
+            channel: data.channel,
+            level: 'info',
+            message: data.summary || 'SIMULATION / DEMO MODE: AI content generated; no financial result.',
+            profitEarned: 0,
+            metadata: { status: 'simulation', output: data.output },
+          }, ...prev.slice(0, 49)]);
         }
         if (data.log) {
           setLogs(prev => [data.log, ...prev.slice(0, 49)]);
@@ -208,7 +203,7 @@ export default function App() {
     }
   };
 
-  // Autonomous Interval Poller
+  // Simulation/strategy interval poller (disabled by default; never credits money)
   useEffect(() => {
     if (autoPilotTimerRef.current) clearInterval(autoPilotTimerRef.current);
 
