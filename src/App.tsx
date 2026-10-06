@@ -378,6 +378,8 @@ export default function App() {
         {activePortal === 'studio' && (
           <RealAutoStudio onGenerateTask={handleGenerateCustomTask} />
         )}
+
+        {activePortal === 'how-it-works' && <HowItWorks />}
       </main>
 
       {/* Footer */}
@@ -385,12 +387,12 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span className="font-bold text-slate-300">AutoEarnAI Protocol</span>
+            <button type="button" onClick={() => setActivePortal('how-it-works')} className="font-bold text-slate-300 hover:text-white">AutoEarnAI — How It Works</button>
             <span>•</span>
-            <span>Autonomous Multi-Engine AI Platform</span>
+            <span>AI content & strategy workspace — financial activity is provider-gated</span>
           </div>
           <div className="text-[11px] text-slate-400">
-            Powered by Gemini 3.7 Flash & Real-Time Algorithmic Execution Rails
+            Gemini-assisted content/analysis only • No real-money execution is enabled
           </div>
         </div>
       </footer>
