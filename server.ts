@@ -59,7 +59,27 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Vercel/production proxy awareness: rate limiting must use the real client IP.
+  app.set('trust proxy', 1);
+
+  // Security headers and a bounded JSON body protect every API route.
+  app.disable('x-powered-by');
+  app.use((_req: Request, res: Response, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
+  });
+
+  // Preserve the exact webhook bytes so provider signatures can be verified against the raw body.
+  // No webhook is trusted yet; the route below still rejects unconfigured providers.
+  app.use(express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  } as any));
 
   // --- AUTH ENDPOINTS ---
   // OTP delivery/verification is delegated to Supabase Auth. AutoEarnAI never returns an OTP.
