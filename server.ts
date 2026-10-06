@@ -159,6 +159,14 @@ async function startServer() {
     if (!checkFinancialRate(req, 30, 60_000)) return res.status(429).json({ error: 'Too many wallet requests. Try again later.', code: 'WALLET_RATE_LIMITED' });
     next();
   });
+  app.use('/api/payment', (req: Request, res: Response, next) => {
+    if (!checkFinancialRate(req, 20, 60_000)) return res.status(429).json({ error: 'Too many payment requests. Try again later.', code: 'PAYMENT_RATE_LIMITED' });
+    next();
+  });
+  app.use('/api/webhooks', (req: Request, res: Response, next) => {
+    if (!checkFinancialRate(req, 60, 60_000)) return res.status(429).json({ error: 'Too many webhook requests. Try again later.', code: 'WEBHOOK_RATE_LIMITED' });
+    next();
+  });
   async function requireUser(req: Request, res: Response) {
     const user = await getAuthenticatedUser(req);
     if (!user) {
