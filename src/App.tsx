@@ -331,6 +331,10 @@ export default function App() {
         }}
       />
 
+      <div className="sticky top-0 z-40 border-b border-rose-700 bg-rose-950 px-4 py-2.5 text-center text-xs sm:text-sm font-bold text-rose-100">
+        THIS IS A SIMULATION. NO REAL MONEY IS BEING EARNED OR MOVED. Payment and payout providers are not configured.
+      </div>
+
       {/* Main Content Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {activePortal === 'dashboard' && (
