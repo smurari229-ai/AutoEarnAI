@@ -92,11 +92,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
     setDepositSuccessMsg(null);
 
     try {
-      let methodLabel = 'Instant UPI Gateway';
+      let methodLabel = 'Payment provider';
       let details: any = {};
 
       if (depositMethod === 'upi') {
-        methodLabel = 'UPI Fast Gateway (GPay/PhonePe)';
+        methodLabel = 'UPI provider';
         details = { upiId: upiVpa };
       } else if (depositMethod === 'card') {
         methodLabel = 'Credit/Debit Card (3D Secure)';
@@ -115,7 +115,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         origin: { y: 0.6 }
       });
 
-      setDepositSuccessMsg(`₹${currentDepositAmount.toLocaleString('en-IN')} deposited successfully! Active capital refreshed.`);
+      setDepositSuccessMsg(`₹${currentDepositAmount.toLocaleString('en-IN')} payment request accepted. Wallet credits only after verified provider settlement.`);
       setTimeout(() => {
         setDepositSuccessMsg(null);
       }, 4000);
@@ -170,7 +170,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
 
       await onWithdrawSuccess(amountNum, withdrawMethod, destination, extra);
 
-      setWithdrawSuccessMsg(`₹${amountNum.toLocaleString('en-IN')} payout initiated! Disbursed via ${withdrawMethod.toUpperCase()}.`);
+      setWithdrawSuccessMsg(`₹${amountNum.toLocaleString('en-IN')} withdrawal request submitted. Payout occurs only after provider verification.`);
       setTimeout(() => {
         setWithdrawSuccessMsg(null);
       }, 4000);
@@ -312,11 +312,11 @@ export const WalletModal: React.FC<WalletModalProps> = ({
               {/* Payment Gateway Method */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Choose Real-Time Payment Gateway
+                  Choose Payment Method
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
-                    { id: 'upi', label: 'Instant UPI', sub: 'GPay, PhonePe, QR', icon: QrCode },
+                    { id: 'upi', label: 'UPI', sub: 'GPay, PhonePe, QR', icon: QrCode },
                     { id: 'card', label: 'Debit / Credit', sub: 'Visa, Master, RuPay', icon: CreditCard },
                     { id: 'netbanking', label: 'Net Banking', sub: 'Direct Bank Wire', icon: Building },
                     { id: 'crypto', label: 'Crypto (USDT)', sub: 'TRC20 / ERC20', icon: Coins },
@@ -349,85 +349,14 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 {/* UPI Details */}
                 {depositMethod === 'upi' && (
                   <div className="space-y-4">
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-slate-900 rounded-2xl border border-slate-800">
-                      <div className="flex items-center gap-4">
-                        {/* Dynamic Clean SVG QR Code */}
-                        <div className="w-20 h-20 bg-white p-1.5 rounded-2xl flex flex-col items-center justify-center flex-shrink-0 shadow-lg border border-emerald-500/30 relative">
-                          <svg className="w-full h-full text-slate-950" viewBox="0 0 100 100" fill="currentColor">
-                            {/* Top Left Finder */}
-                            <rect x="5" y="5" width="28" height="28" rx="4" fill="#020617" />
-                            <rect x="10" y="10" width="18" height="18" rx="2" fill="#ffffff" />
-                            <rect x="14" y="14" width="10" height="10" rx="1" fill="#020617" />
-                            {/* Top Right Finder */}
-                            <rect x="67" y="5" width="28" height="28" rx="4" fill="#020617" />
-                            <rect x="72" y="10" width="18" height="18" rx="2" fill="#ffffff" />
-                            <rect x="76" y="14" width="10" height="10" rx="1" fill="#020617" />
-                            {/* Bottom Left Finder */}
-                            <rect x="5" y="67" width="28" height="28" rx="4" fill="#020617" />
-                            <rect x="10" y="72" width="18" height="18" rx="2" fill="#ffffff" />
-                            <rect x="14" y="76" width="10" height="10" rx="1" fill="#020617" />
-                            {/* Data Matrix Elements */}
-                            <rect x="38" y="10" width="6" height="6" fill="#020617" />
-                            <rect x="48" y="14" width="8" height="6" fill="#059669" />
-                            <rect x="40" y="24" width="12" height="6" fill="#020617" />
-                            <rect x="10" y="38" width="8" height="8" fill="#020617" />
-                            <rect x="22" y="42" width="6" height="10" fill="#059669" />
-                            <rect x="38" y="38" width="24" height="24" rx="4" fill="#020617" />
-                            <rect x="44" y="44" width="12" height="12" rx="2" fill="#ffffff" />
-                            <rect x="48" y="48" width="4" height="4" fill="#059669" />
-                            <rect x="68" y="38" width="10" height="6" fill="#020617" />
-                            <rect x="82" y="42" width="8" height="8" fill="#020617" />
-                            <rect x="38" y="68" width="8" height="8" fill="#059669" />
-                            <rect x="50" y="72" width="10" height="6" fill="#020617" />
-                            <rect x="68" y="68" width="8" height="16" fill="#020617" />
-                            <rect x="80" y="78" width="12" height="8" fill="#020617" />
-                          </svg>
-                          <div className="absolute -bottom-2 bg-emerald-500 text-[8px] font-black font-mono text-slate-950 px-1.5 py-0.2 rounded-full shadow">
-                            ₹{currentDepositAmount}
-                          </div>
-                        </div>
-
+                    <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                      <div className="flex items-center gap-3">
+                        <ShieldCheck className="w-5 h-5 text-slate-400" />
                         <div>
-                          <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                            <span>Payment provider QR</span>
-                            <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-mono">0% FEE</span>
-                          </div>
-                          <div className="text-[11px] text-slate-400">GPay, PhonePe, Paytm, CRED, BHIM</div>
-                          <div className="text-[11px] text-emerald-400 font-mono mt-0.5 font-bold">
-                            Payment provider not configured
-                          </div>
+                          <div className="text-xs font-bold text-white">Payment provider unavailable</div>
+                          <div className="text-[11px] text-slate-400">No QR, VPA, or payment credentials are active. Wallet credit requires verified provider settlement.</div>
                         </div>
                       </div>
-
-                      <div className="flex sm:flex-col gap-2 w-full sm:w-auto">
-                        <button
-                          type="button"
-                          onClick={() => handleCopy('Payment provider not configured')}
-                          className="flex-1 sm:flex-initial px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 rounded-xl flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                          {copiedText ? 'Copied VPA!' : 'Copy UPI ID'}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Quick UPI App Selectors */}
-                    <div className="grid grid-cols-4 gap-2">
-                      {[
-                        { name: 'Google Pay', color: 'text-blue-400' },
-                        { name: 'PhonePe', color: 'text-purple-400' },
-                        { name: 'Paytm', color: 'text-cyan-400' },
-                        { name: 'BHIM UPI', color: 'text-amber-400' },
-                      ].map(app => (
-                        <div
-                          key={app.name}
-                          className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-center hover:border-slate-700 transition-all cursor-pointer"
-                          onClick={() => handleCopy(`upi://pay?pa=autoearn.capital@icici&pn=AutoEarnAI&am=${currentDepositAmount}&cu=INR`)}
-                        >
-                          <div className={`text-[11px] font-bold ${app.color}`}>{app.name}</div>
-                          <div className="text-[9px] text-slate-500">Auto App Link</div>
-                        </div>
-                      ))}
                     </div>
 
                     <div>
@@ -487,7 +416,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 {/* Net Banking */}
                 {depositMethod === 'netbanking' && (
                   <div className="space-y-2">
-                    <label className="block text-[11px] font-medium text-slate-400">Select Instant Net Banking Bank</label>
+                    <label className="block text-[11px] font-medium text-slate-400">Select Net Banking Bank</label>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                       {['HDFC Bank', 'State Bank of India', 'ICICI Bank', 'Axis Bank', 'Kotak Mahindra', 'Punjab National Bank'].map((b) => (
                         <button
@@ -613,7 +542,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {[
-                    { id: 'upi', label: 'Instant UPI Payout', sub: 'Zero fee • 30 secs', icon: QrCode },
+                    { id: 'upi', label: 'UPI Payout', sub: 'Provider required', icon: QrCode },
                     { id: 'bank', label: 'IMPS Bank Wire', sub: 'Direct Account credit', icon: Building },
                     { id: 'crypto', label: 'Crypto USDT', sub: 'TRC-20 Address', icon: Coins },
                   ].map((m) => {
@@ -727,7 +656,7 @@ export const WalletModal: React.FC<WalletModalProps> = ({
                 ) : (
                   <>
                     <ArrowUpRight className="w-5 h-5" />
-                    <span>Disburse ₹{parseFloat(withdrawAmount || '0').toLocaleString('en-IN')} Instantly</span>
+                    <span>Submit ₹{parseFloat(withdrawAmount || '0').toLocaleString('en-IN')} Withdrawal Request</span>
                   </>
                 )}
               </button>
