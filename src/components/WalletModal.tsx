@@ -267,225 +267,31 @@ export const WalletModal: React.FC<WalletModalProps> = ({
         {/* Modal Body */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1">
           
-          {/* TAB 1: DEPOSIT GATEWAY */}
+          {/* TAB 1: DEPOSIT — DISABLED UNTIL A VERIFIED PROVIDER IS CONFIGURED */}
           {activeTab === 'deposit' && (
             <div className="space-y-5">
-              {depositSuccessMsg && (
-                <div className="p-3.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs font-semibold flex items-center gap-2">
-                  <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
-                  <span>{depositSuccessMsg}</span>
-                </div>
-              )}
-
-              {/* Amount Presets */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Select Deposit Amount (INR)
-                </label>
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mb-2">
-                  {[500, 1000, 5000, 10000, 25000].map((amt) => (
-                    <button
-                      key={amt}
-                      type="button"
-                      onClick={() => { setDepositAmount(amt); setCustomDeposit(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border ${
-                        depositAmount === amt && !customDeposit
-                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                      }`}
-                    >
-                      ₹{amt.toLocaleString('en-IN')}
-                    </button>
-                  ))}
-                </div>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-semibold">₹</span>
-                  <input
-                    type="number"
-                    value={customDeposit}
-                    onChange={(e) => setCustomDeposit(e.target.value)}
-                    placeholder="Or enter custom amount (e.g. 15000)"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                  />
+              <div className="p-5 rounded-2xl bg-rose-500/10 border border-rose-500/30">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-6 h-6 text-rose-400 flex-shrink-0" />
+                  <div>
+                    <h3 className="text-sm font-bold text-rose-300">Deposits are disabled</h3>
+                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                      No payment provider is configured. Do not enter card, UPI, bank, or crypto payment details here.
+                      Wallet credits can only be created after verified provider settlement.
+                    </p>
+                  </div>
                 </div>
               </div>
-
-              {/* Payment Gateway Method */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-2">
-                  Choose Payment Method
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {[
-                    { id: 'upi', label: 'UPI', sub: 'GPay, PhonePe, QR', icon: QrCode },
-                    { id: 'card', label: 'Debit / Credit', sub: 'Visa, Master, RuPay', icon: CreditCard },
-                    { id: 'netbanking', label: 'Net Banking', sub: 'Direct Bank Wire', icon: Building },
-                    { id: 'crypto', label: 'Crypto (USDT)', sub: 'TRC20 / ERC20', icon: Coins },
-                  ].map((m) => {
-                    const Icon = m.icon;
-                    const isSelected = depositMethod === m.id;
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setDepositMethod(m.id as any)}
-                        className={`p-3 rounded-xl border text-left transition-all ${
-                          isSelected
-                            ? 'bg-emerald-500/10 border-emerald-500/50 text-white shadow-sm'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
-                      >
-                        <Icon className={`w-5 h-5 mb-1.5 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
-                        <div className="text-xs font-bold text-slate-200">{m.label}</div>
-                        <div className="text-[10px] text-slate-500">{m.sub}</div>
-                      </button>
-                    );
-                  })}
-                </div>
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400">
+                <div className="font-semibold text-slate-200 mb-1">Production status</div>
+                <div>Payment order creation, signed webhook verification, and ledger settlement are not enabled yet.</div>
               </div>
-
-              {/* Dynamic Gateway Details Section */}
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-                
-                {/* UPI Details */}
-                {depositMethod === 'upi' && (
-                  <div className="space-y-4">
-                    <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-                      <div className="flex items-center gap-3">
-                        <ShieldCheck className="w-5 h-5 text-slate-400" />
-                        <div>
-                          <div className="text-xs font-bold text-white">Payment provider unavailable</div>
-                          <div className="text-[11px] text-slate-400">No QR, VPA, or payment credentials are active. Wallet credit requires verified provider settlement.</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-400 mb-1">
-                        Or enter your Personal UPI ID to receive a direct collect request:
-                      </label>
-                      <input
-                        type="text"
-                        value={upiVpa}
-                        onChange={(e) => setUpiVpa(e.target.value)}
-                        placeholder="yourname@okhdfcbank"
-                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Card Details */}
-                {depositMethod === 'card' && (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-400 mb-1">Card Number</label>
-                      <input
-                        type="text"
-                        value={cardNumber}
-                        onChange={(e) => setCardNumber(e.target.value)}
-                        placeholder="4532 8910 2341 9081"
-                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-medium text-slate-400 mb-1">Expiry Date</label>
-                        <input
-                          type="text"
-                          value={cardExpiry}
-                          onChange={(e) => setCardExpiry(e.target.value)}
-                          placeholder="MM/YY"
-                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-medium text-slate-400 mb-1">CVV</label>
-                        <input
-                          type="password"
-                          maxLength={4}
-                          value={cardCvv}
-                          onChange={(e) => setCardCvv(e.target.value)}
-                          placeholder="***"
-                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Net Banking */}
-                {depositMethod === 'netbanking' && (
-                  <div className="space-y-2">
-                    <label className="block text-[11px] font-medium text-slate-400">Select Net Banking Bank</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {['HDFC Bank', 'State Bank of India', 'ICICI Bank', 'Axis Bank', 'Kotak Mahindra', 'Punjab National Bank'].map((b) => (
-                        <button
-                          key={b}
-                          type="button"
-                          onClick={() => setSelectedBank(b)}
-                          className={`p-2 rounded-lg text-xs font-semibold text-center border transition-all ${
-                            selectedBank === b
-                              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
-                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
-                          }`}
-                        >
-                          {b}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Crypto */}
-                {depositMethod === 'crypto' && (
-                  <div className="space-y-2">
-                    <div className="flex gap-2">
-                      {(['TRC20', 'ERC20'] as const).map(net => (
-                        <button
-                          key={net}
-                          type="button"
-                          onClick={() => setCryptoNetwork(net)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                            cryptoNetwork === net
-                              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
-                              : 'bg-slate-900 border-slate-800 text-slate-400'
-                          }`}
-                        >
-                          USDT ({net})
-                        </button>
-                      ))}
-                    </div>
-                    <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between text-xs">
-                      <span className="font-mono text-slate-300 truncate mr-2">0x89F1a4D88a6d7Eb39c8A1102A6F29C8931</span>
-                      <button
-                        type="button"
-                        onClick={() => handleCopy('0x89F1a4D88a6d7Eb39c8A1102A6F29C8931')}
-                        className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-              </div>
-
-              {/* Deposit Action Button */}
               <button
                 type="button"
-                onClick={executeDeposit}
-                disabled={isProcessingDeposit || currentDepositAmount <= 0}
-                className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold py-3.5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+                disabled
+                className="w-full bg-slate-800 text-slate-500 font-bold py-3.5 rounded-xl cursor-not-allowed"
               >
-                {isProcessingDeposit ? (
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                ) : (
-                  <>
-                    <Lock className="w-4 h-4" />
-                    <span>Pay & Deposit ₹{currentDepositAmount.toLocaleString('en-IN')} Instantly</span>
-                  </>
-                )}
+                Deposits unavailable
               </button>
             </div>
           )}
