@@ -1,6 +1,6 @@
 {
-  "name": "AutoEarnAI — AI Content & Strategy Workspace",
-  "description": "AI-assisted content and strategy workspace. Financial activity is disabled until independently verified payment, payout, and settlement providers are configured.",
+  "name": "AutoEarnAI — Honest AI Content & Strategy Demo",
+  "description": "AI-assisted content and strategy UI demo. No real money is generated, earned, traded, deposited, or withdrawn. All financial-looking values are simulated.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
