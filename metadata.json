@@ -1,0 +1,6 @@
+{
+  "name": "AI Auto-Earning & Multi-Portal Hub",
+  "description": "Real-time AI autonomous revenue engine across YouTube, Social Media, Stock Markets, Freelancing & News Arbitrage with OTP auth, live wallet deposit and withdrawal gateways.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
