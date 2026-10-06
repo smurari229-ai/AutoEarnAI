@@ -258,20 +258,27 @@ export default function App() {
   const handleWithdrawSuccess = async (amount: number, method: string, destination: string, extra?: any) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('Authentication required');
-    const res = await fetch('/api/wallet/withdraw', {
+
+    const idempotencyKey = crypto.randomUUID();
+    const res = await fetch('/api/wallet/withdraw-request', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ amount, method, destination, ...extra }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        amountMinor: Math.round(amount * 100),
+        method,
+        destination: { value: destination, ...extra },
+        idempotencyKey,
+      }),
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Withdrawal failed');
-    }
-    const data = await res.json();
-    setWallet(prev => ({
-      ...data.updatedBalance,
-      transactions: [data.transaction, ...prev.transactions],
-    }));
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Withdrawal request failed');
+
+    // A request does not deduct or reserve funds in the browser. Trusted payout processing does that later.
     await fetchWalletData();
   };
 
