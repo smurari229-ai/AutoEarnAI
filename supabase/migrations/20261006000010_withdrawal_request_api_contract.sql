@@ -1,0 +1,3 @@
+-- Provider-independent withdrawal request contract.
+-- The browser may create only a requested row; reservation/payout remain trusted-server operations.
+-- Existing RLS enforces user ownership, INR, positive amount, and requested status.
