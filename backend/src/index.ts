@@ -1,0 +1,1 @@
+import{app}from"./app.js";import{env}from"./config/env.js";import{scheduleSync}from"./jobs/syncQueue.js";await scheduleSync();app.listen(env.PORT,()=>console.log("EarnPilot API listening on "+env.PORT))

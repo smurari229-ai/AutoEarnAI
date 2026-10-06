@@ -1,0 +1,1 @@
+import{Queue}from"bullmq";import{redis}from"../config/redis.js";export const syncQueue=new Queue("earnings-sync",{connection:redis});export const scheduleSync=()=>syncQueue.upsertJobScheduler("six-hour-sync",{every:21600000},{name:"sync-all-users",data:{}})

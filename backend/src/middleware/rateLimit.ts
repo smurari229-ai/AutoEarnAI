@@ -1,0 +1,1 @@
+import rateLimit from"express-rate-limit";export const authRateLimit=rateLimit({windowMs:900000,limit:30,standardHeaders:true,legacyHeaders:false});export const apiRateLimit=rateLimit({windowMs:60000,limit:120,standardHeaders:true,legacyHeaders:false});export const aiRateLimit=rateLimit({windowMs:60000,limit:20,standardHeaders:true,legacyHeaders:false});

@@ -1,0 +1,1 @@
+import{Router}from"express";import{auth}from"../../middleware/auth.js";import*as c from"./earnings.controller.js";export const earningsRouter=Router();earningsRouter.use(auth);earningsRouter.get("/",c.earnings);earningsRouter.get("/transactions",c.transactions);earningsRouter.post("/sync",c.sync)
