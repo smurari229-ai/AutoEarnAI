@@ -331,8 +331,13 @@ export default function App() {
         }}
       />
 
-      <div className="sticky top-0 z-40 border-b border-rose-700 bg-rose-950 px-4 py-2.5 text-center text-xs sm:text-sm font-bold text-rose-100">
-        THIS IS A SIMULATION. NO REAL MONEY IS BEING EARNED OR MOVED. Payment and payout providers are not configured.
+      {/* Permanent, non-dismissible Demo Mode disclosure. Keep visible on every route. */}
+      <div
+        role="alert"
+        aria-label="Simulation warning"
+        className="sticky top-0 z-50 border-b-2 border-rose-500 bg-rose-950 px-4 py-3 text-center text-xs sm:text-sm font-black tracking-wide text-rose-50 shadow-lg"
+      >
+        ⚠️ THIS IS A SIMULATION. NO REAL MONEY IS BEING EARNED OR MOVED. ALL BALANCES AND PROFITS ARE FAKE.
       </div>
 
       {/* Main Content Body */}
