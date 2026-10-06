@@ -1,8 +1,12 @@
-FROM node:22-alpine
+FROM node:22-alpine AS backend-build
+WORKDIR /app/backend
+COPY backend/package.json backend/package-lock.json* ./
+RUN npm install
+COPY backend ./
+RUN npx prisma generate && npm run build
+FROM node:22-alpine AS runtime
 WORKDIR /app
-COPY backend ./backend
-COPY frontend ./frontend
-RUN cd backend && npm install && npx prisma generate && npm run build
-RUN cd frontend && npm install && npm run build
+COPY --from=backend-build /app/backend /app/backend
+ENV NODE_ENV=production
 EXPOSE 4000
-CMD ["node","backend/dist/index.js"]
+CMD ["sh","-c","cd /app/backend && npx prisma migrate deploy && node dist/index.js"]
