@@ -381,48 +381,28 @@ async function startServer() {
         actionSummary = `News Arbitrage Portal generated SEO breaking article "${newsHeadline.slice(0, 40)}...". CPM & Display Ads: +₹${profitGenerated}.`;
       }
 
-      // Add to balance
-      userBalance.totalBalance += profitGenerated;
-      userBalance.todaysEarnings += profitGenerated;
-
-      const newTxn = {
-        id: 'AI-' + Math.floor(100000 + Math.random() * 900000),
-        type: 'ai_earning',
-        channel: chosenChannel,
-        title: actionSummary,
-        amount: profitGenerated,
-        currency: '₹',
-        timestamp: Date.now(),
-        status: 'completed',
-        method: 'Autonomous AI Agent',
-        referenceId: 'AUTO-' + Date.now().toString().slice(-7),
-        notes: `Executed under ${chosenChannel.toUpperCase()} channel automation pipeline`
-      };
-
-      transactionsHistory.unshift(newTxn);
-
+      // IMPORTANT: AI output is simulation/strategy output only.
+      // It is never credited to a real wallet without an independently verified earning source.
       const log = {
         id: 'LOG-' + Date.now(),
         timestamp: Date.now(),
         channel: chosenChannel,
-        level: 'earning',
-        message: actionSummary,
-        profitEarned: profitGenerated,
-        metadata: itemData
+        level: 'info',
+        message: `Simulation only: ${actionSummary}`,
+        profitEarned: 0,
+        metadata: { ...itemData, simulatedProfit: profitGenerated, status: 'simulation' }
       };
       liveLogs.unshift(log);
-
-      // Keep logs list manageable
       if (liveLogs.length > 50) liveLogs = liveLogs.slice(0, 50);
-      if (transactionsHistory.length > 50) transactionsHistory = transactionsHistory.slice(0, 50);
 
       res.json({
         success: true,
+        simulation: true,
+        status: 'simulation',
         channel: chosenChannel,
-        profit: profitGenerated,
+        projectedAmount: profitGenerated,
         summary: actionSummary,
         itemData,
-        updatedBalance: userBalance,
         log
       });
 
@@ -582,46 +562,22 @@ The rapid proliferation of self-orchestrating artificial intelligence agents pai
         fallbackTextGenerator
       );
 
-      // Compute task fee/earnings reward
-      const taskProfit = Math.floor(320 + Math.random() * 880);
-      userBalance.totalBalance += taskProfit;
-      userBalance.todaysEarnings += taskProfit;
-
-      const newTxn = {
-        id: 'AI-' + Math.floor(100000 + Math.random() * 900000),
-        type: 'ai_earning',
-        channel: channel || 'custom',
-        title: `Manual AI Brain Task: ${(prompt || channel || 'Deliverable').slice(0, 45)}`,
-        amount: taskProfit,
-        currency: '₹',
-        timestamp: Date.now(),
-        status: 'completed',
-        method: 'Supreme Neural AI Brain',
-        referenceId: 'CUST-' + Date.now().toString().slice(-7),
-        notes: `Brain Mode: ${mode.toUpperCase()} - Delivered on-demand revenue asset`
-      };
-
-      transactionsHistory.unshift(newTxn);
-
+      // AI deliverables are not financial proof. Do not credit the wallet from generated content.
       res.json({
         success: true,
+        status: 'simulation',
         output: resultText,
-        rewardEarned: taskProfit,
+        rewardEarned: 0,
         brainMode: mode,
-        updatedBalance: userBalance
+        message: 'Deliverable generated. No financial credit was created; verified revenue must be recorded through a supported provider.'
       });
     } catch (err: any) {
-      console.error('Custom task error handled:', err);
-      const taskProfit = 380;
-      userBalance.totalBalance += taskProfit;
-      userBalance.todaysEarnings += taskProfit;
-
-      res.json({
-        success: true,
-        output: `[Supreme AI Brain Executed for ${channel || 'Custom'}]:\n\n1. Target Strategy: High CPM Monetization & Real-Time Direct Execution.\n2. Asset Created: "${prompt || 'Automated AI Deliverable'}"\n3. Deliverable Status: Completed and verified.\n4. Working Yield: +₹${taskProfit} credited to balance.`,
-        rewardEarned: taskProfit,
-        brainMode: 'hyper_growth',
-        updatedBalance: userBalance
+      console.error('Custom task generation failed:', err);
+      res.status(503).json({
+        success: false,
+        status: 'unavailable',
+        error: 'AI generation failed. No financial credit was created.',
+        code: 'AI_GENERATION_FAILED'
       });
     }
   });
