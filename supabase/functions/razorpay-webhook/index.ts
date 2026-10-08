@@ -160,6 +160,10 @@ export default {
       return json({ received: true, settled: false, status: failure?.status ?? "unknown" }, 200);
     }
 
+    // Ignore unsupported-but-authenticated events without leaving them perpetually retryable.
+    if (!(await markEventProcessed(ctx, eventId))) {
+      return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
+    }
     return json({ received: true, processed: false, event: eventType }, 200);
   }),
 };
