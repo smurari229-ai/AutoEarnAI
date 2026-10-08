@@ -2,107 +2,11 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { getAuthenticatedUser, getSupabaseClient, getUserScopedClient } from './server/supabase';
 
 dotenv.config();
 
-// In-memory data store for live demo and multi-channel state
-interface StoredOTP {
-  phoneOrEmail: string;
-  otp: string;
-  expiresAt: number;
-}
-
-const otpStore = new Map<string, StoredOTP>();
-
-// Global in-memory user balance & activity store
-let userBalance = {
-  totalBalance: 45850.00, // ₹45,850 initial working capital
-  todaysEarnings: 3420.50,
-  totalWithdrawn: 12500.00,
-  totalDeposited: 30000.00,
-  lockedInTrades: 8200.00,
-  currency: '₹',
-};
-
-let transactionsHistory: any[] = [
-  {
-    id: 'TXN-908234',
-    type: 'deposit',
-    title: 'Instant UPI Fast Deposit',
-    amount: 15000,
-    currency: '₹',
-    timestamp: Date.now() - 3600000 * 24,
-    status: 'completed',
-    method: 'UPI (Google Pay / PhonePe)',
-    referenceId: 'UPI-REF-981240982',
-    notes: 'Direct bank debit via NPCI UPI Fast Gateway'
-  },
-  {
-    id: 'TXN-908235',
-    type: 'ai_earning',
-    channel: 'youtube',
-    title: 'YouTube AdSense & Affiliate Automation',
-    amount: 1240.00,
-    currency: '₹',
-    timestamp: Date.now() - 3600000 * 14,
-    status: 'completed',
-    referenceId: 'YT-ADS-881290',
-    notes: 'Video: "Top 5 AI Automation Tools 2026" - 24,800 views'
-  },
-  {
-    id: 'TXN-908236',
-    type: 'trade_profit',
-    channel: 'stock_market',
-    title: 'AI Algo Trade Profit (NIFTY & NVDA)',
-    amount: 1850.50,
-    currency: '₹',
-    timestamp: Date.now() - 3600000 * 6,
-    status: 'completed',
-    referenceId: 'NSE-ALGO-44129',
-    notes: 'Momentum Breakout Strategy execution'
-  },
-  {
-    id: 'TXN-908237',
-    type: 'freelance_payout',
-    channel: 'freelance',
-    title: 'Upwork AI Client Milestone Payment',
-    amount: 330.00,
-    currency: '₹',
-    timestamp: Date.now() - 3600000 * 2,
-    status: 'completed',
-    referenceId: 'UPW-ESC-77821',
-    notes: 'Python Data Extraction Script - Auto delivered'
-  }
-];
-
-let liveLogs: any[] = [
-  {
-    id: 'LOG-1',
-    timestamp: Date.now() - 3600000,
-    channel: 'stock_market',
-    level: 'earning',
-    message: 'AI Algo Market Bot triggered BUY signal on TATA MOTORS at ₹980.50. Scalped +₹480 profit.',
-    profitEarned: 480
-  },
-  {
-    id: 'LOG-2',
-    timestamp: Date.now() - 1800000,
-    channel: 'youtube',
-    level: 'info',
-    message: 'YouTube Script Generator compiled "High CPM Faceless Channel Script: Cloud Computing Trends".',
-    profitEarned: 0
-  },
-  {
-    id: 'LOG-3',
-    timestamp: Date.now() - 900000,
-    channel: 'social',
-    level: 'earning',
-    message: 'Instagram Reel + Twitter Thread posted automatically. 14 affiliate clicks registered (+₹210).',
-    profitEarned: 210
-  }
-];
-
-// Lazy-initialized Gemini instance
+// Persistent Supabase state is the financial source of truth. No in-memory balances/transactions are used.\n\n// Lazy-initialized Gemini instance
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return null;
@@ -155,606 +59,495 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Vercel/production proxy awareness: rate limiting must use the real client IP.
+  app.set('trust proxy', 1);
 
-  // --- AUTH ENDPOINTS (OTP Based) ---
-  app.post('/api/auth/send-otp', (req: Request, res: Response) => {
-    const { phoneOrEmail } = req.body;
-    if (!phoneOrEmail || typeof phoneOrEmail !== 'string') {
-      res.status(400).json({ error: 'Valid phone number or email is required' });
-      return;
-    }
-
-    // Generate 6 digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins
-
-    otpStore.set(phoneOrEmail.trim(), { phoneOrEmail: phoneOrEmail.trim(), otp, expiresAt });
-
-    console.log(`[AUTH] Generated OTP for ${phoneOrEmail}: ${otp}`);
-
-    // Return success along with test OTP for seamless demo testing
-    res.json({
-      success: true,
-      message: `OTP sent successfully to ${phoneOrEmail}`,
-      testOtp: otp, // For rapid testing & demo convenience
-      expiresInSeconds: 300
-    });
+  // Security headers and a bounded JSON body protect every API route.
+  app.disable('x-powered-by');
+  app.use((_req: Request, res: Response, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    next();
   });
 
-  app.post('/api/auth/verify-otp', (req: Request, res: Response) => {
-    const { phoneOrEmail, otp, name } = req.body;
-    if (!phoneOrEmail || !otp) {
-      res.status(400).json({ error: 'Phone/Email and OTP code are required' });
-      return;
+  // Preserve the exact webhook bytes so provider signatures can be verified against the raw body.
+  // No webhook is trusted yet; the route below still rejects unconfigured providers.
+  app.use(express.json({
+    limit: '1mb',
+    verify: (req, _res, buf) => {
+      (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+    },
+  } as any));
+
+  // --- AUTH ENDPOINTS ---
+  // OTP delivery/verification is delegated to Supabase Auth. AutoEarnAI never returns an OTP.
+  const authRate = new Map<string, { count: number; resetAt: number }>();
+  const checkRateLimit = (key: string, max: number, windowMs: number): boolean => {
+    const now = Date.now();
+    const current = authRate.get(key);
+    if (!current || current.resetAt <= now) {
+      authRate.set(key, { count: 1, resetAt: now + windowMs });
+      return true;
+    }
+    if (current.count >= max) return false;
+    current.count += 1;
+    return true;
+  };
+
+  const clientIp = (req: Request) => req.ip || req.socket.remoteAddress || 'unknown';
+  const normalizePhone = (value: string) => {
+    const digits = value.replace(/\\D/g, '');
+    if (digits.length === 10) return `+91${digits}`;
+    return value.trim();
+  };
+
+  app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
+    const type = String(req.body?.type || '').trim().toLowerCase();
+    const identifier = String(req.body?.identifier || '').trim();
+    if (!['email', 'phone'].includes(type) || !identifier) {
+      return res.status(400).json({ error: 'Valid email or phone is required', code: 'INVALID_AUTH_INPUT' });
+    }
+    const normalized = type === 'phone' ? normalizePhone(identifier) : identifier.toLowerCase();
+    const key = `otp-send:${clientIp(req)}:${type}:${normalized}`;
+    if (!checkRateLimit(key, 5, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many OTP requests. Try again later.', code: 'OTP_RATE_LIMITED' });
     }
 
-    const stored = otpStore.get(phoneOrEmail.trim());
+    const client = getSupabaseClient();
+    if (!client) return res.status(503).json({ error: 'Authentication provider is not configured', code: 'AUTH_PROVIDER_NOT_CONFIGURED' });
 
-    // Allow static demo OTP "123456" as universal sandbox code
-    const isMasterCode = otp === '123456' || otp === '999999';
-    const isValid = isMasterCode || (stored && stored.otp === otp && Date.now() < stored.expiresAt);
+    const credentials = type === 'email' ? { email: normalized } : { phone: normalized };
+    const { error } = await client.auth.signInWithOtp({
+      ...credentials,
+      options: { shouldCreateUser: true, data: { full_name: String(req.body?.name || '').trim().slice(0, 120) || undefined } }
+    });
+    if (error) return res.status(502).json({ error: 'Unable to send verification code', code: 'OTP_SEND_FAILED' });
+    return res.json({ success: true, message: 'Verification code sent.' });
+  });
 
-    if (!isValid) {
-      res.status(400).json({ error: 'Invalid or expired OTP. Try 123456 for instant demo access.' });
-      return;
+  app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
+    const type = String(req.body?.type || '').trim().toLowerCase();
+    const identifier = String(req.body?.identifier || '').trim();
+    const token = String(req.body?.token || '').trim();
+    if (!['email', 'phone'].includes(type) || !identifier || !/^\\d{6}$/.test(token)) {
+      return res.status(400).json({ error: 'Valid identifier and 6-digit verification code are required', code: 'INVALID_AUTH_INPUT' });
+    }
+    const normalized = type === 'phone' ? normalizePhone(identifier) : identifier.toLowerCase();
+    const key = `otp-verify:${clientIp(req)}:${type}:${normalized}`;
+    if (!checkRateLimit(key, 10, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many verification attempts. Try again later.', code: 'OTP_VERIFY_RATE_LIMITED' });
     }
 
-    // OTP verified successfully
-    otpStore.delete(phoneOrEmail.trim());
+    const client = getSupabaseClient();
+    if (!client) return res.status(503).json({ error: 'Authentication provider is not configured', code: 'AUTH_PROVIDER_NOT_CONFIGURED' });
 
-    const user = {
-      id: 'USR-' + Math.random().toString(36).substring(2, 9).toUpperCase(),
-      phoneNumber: phoneOrEmail.includes('@') ? '' : phoneOrEmail,
-      email: phoneOrEmail.includes('@') ? phoneOrEmail : `${phoneOrEmail.replace(/\D/g, '')}@autoearner.ai`,
-      name: name || (phoneOrEmail.includes('@') ? phoneOrEmail.split('@')[0] : `Trader_${phoneOrEmail.slice(-4)}`),
-      isVerified: true,
-      kycStatus: 'verified',
-      createdAt: Date.now()
-    };
+    const verifyInput = type === 'email'
+      ? { email: normalized, token, type: 'email' as const }
+      : { phone: normalized, token, type: 'sms' as const };
+    const { data, error } = await client.auth.verifyOtp(verifyInput);
+    if (error || !data.user || !data.session) {
+      return res.status(401).json({ error: 'Invalid or expired verification code', code: 'OTP_INVALID_OR_EXPIRED' });
+    }
 
-    const token = 'TOKEN_' + Buffer.from(JSON.stringify(user)).toString('base64');
-
-    res.json({
+    return res.json({
       success: true,
-      message: 'Login successful via secure OTP verification',
-      user,
-      token
+      user: data.user,
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        expires_at: data.session.expires_at,
+        expires_in: data.session.expires_in,
+        token_type: data.session.token_type,
+      }
     });
   });
 
   // --- WALLET & PAYMENT GATEWAY ENDPOINTS ---
-  app.get('/api/wallet/data', (req: Request, res: Response) => {
-    res.json({
-      balance: userBalance,
-      transactions: transactionsHistory,
-      logs: liveLogs
-    });
+  const financialRate = new Map<string, { count: number; resetAt: number }>();
+  const checkFinancialRate = (req: Request, limit = 30, windowMs = 60_000) => {
+    const key = `${clientIp(req)}:${req.path}`;
+    const now = Date.now();
+    const current = financialRate.get(key);
+    if (!current || current.resetAt <= now) { financialRate.set(key, { count: 1, resetAt: now + windowMs }); return true; }
+    if (current.count >= limit) return false;
+    current.count += 1;
+    return true;
+  };
+  app.use('/api/wallet', (req: Request, res: Response, next) => {
+    if (!checkFinancialRate(req, 30, 60_000)) return res.status(429).json({ error: 'Too many wallet requests. Try again later.', code: 'WALLET_RATE_LIMITED' });
+    next();
   });
-
-  // Deposit Gateway (UPI, Cards, NetBanking, Crypto)
-  app.post('/api/wallet/deposit', (req: Request, res: Response) => {
-    const { amount, method, gatewayRef, upiId, cardLast4 } = req.body;
-    const numAmount = parseFloat(amount);
-
-    if (isNaN(numAmount) || numAmount <= 0) {
-      res.status(400).json({ error: 'Please enter a valid deposit amount.' });
-      return;
-    }
-
-    if (numAmount < 100) {
-      res.status(400).json({ error: 'Minimum deposit amount is ₹100.' });
-      return;
-    }
-
-    const txnId = 'DEP-' + Math.floor(100000 + Math.random() * 900000);
-    const reference = gatewayRef || 'UPI-' + Date.now().toString().slice(-8);
-
-    userBalance.totalBalance += numAmount;
-    userBalance.totalDeposited += numAmount;
-
-    const newTxn = {
-      id: txnId,
-      type: 'deposit',
-      title: `Deposit via ${method || 'Instant UPI Gateway'}`,
-      amount: numAmount,
-      currency: '₹',
-      timestamp: Date.now(),
-      status: 'completed',
-      method: method || 'UPI Gateway',
-      referenceId: reference,
-      notes: upiId ? `Paid from UPI VPA: ${upiId}` : cardLast4 ? `Card ending in ****${cardLast4}` : 'Real-time Gateway Confirmation'
-    };
-
-    transactionsHistory.unshift(newTxn);
-
-    const logEntry = {
-      id: 'LOG-' + Date.now(),
-      timestamp: Date.now(),
-      channel: 'system',
-      level: 'success',
-      message: `Deposit of ₹${numAmount.toLocaleString('en-IN')} confirmed via ${method || 'UPI Gateway'}. Available working capital updated.`,
-      profitEarned: 0
-    };
-    liveLogs.unshift(logEntry);
-
-    res.json({
-      success: true,
-      message: `₹${numAmount.toLocaleString('en-IN')} deposited successfully into active wallet.`,
-      transaction: newTxn,
-      updatedBalance: userBalance
-    });
+  app.use('/api/payment', (req: Request, res: Response, next) => {
+    if (!checkFinancialRate(req, 20, 60_000)) return res.status(429).json({ error: 'Too many payment requests. Try again later.', code: 'PAYMENT_RATE_LIMITED' });
+    next();
   });
-
-  // Withdrawal Gateway (Bank IMPS/NEFT, UPI VPA, Crypto)
-  app.post('/api/wallet/withdraw', (req: Request, res: Response) => {
-    const { amount, method, destination, accountHolder, ifscCode } = req.body;
-    const numAmount = parseFloat(amount);
-
-    if (isNaN(numAmount) || numAmount <= 0) {
-      res.status(400).json({ error: 'Please enter a valid withdrawal amount.' });
-      return;
-    }
-
-    if (numAmount > userBalance.totalBalance) {
-      res.status(400).json({ error: `Insufficient wallet balance. You have ₹${userBalance.totalBalance.toFixed(2)} available.` });
-      return;
-    }
-
-    if (numAmount < 500) {
-      res.status(400).json({ error: 'Minimum payout withdrawal threshold is ₹500.' });
-      return;
-    }
-
-    // Deduct balance
-    userBalance.totalBalance -= numAmount;
-    userBalance.totalWithdrawn += numAmount;
-
-    const payoutTxnId = 'WTH-' + Math.floor(100000 + Math.random() * 900000);
-    const utrNumber = 'UTR-' + Date.now().toString().slice(-9);
-
-    const newTxn = {
-      id: payoutTxnId,
-      type: 'withdrawal',
-      title: `Payout Withdrawal to ${method === 'upi' ? 'UPI ID' : 'Bank Account'}`,
-      amount: numAmount,
-      currency: '₹',
-      timestamp: Date.now(),
-      status: 'completed',
-      method: method === 'upi' ? `Instant UPI (${destination})` : `IMPS Direct Bank (${destination})`,
-      referenceId: utrNumber,
-      notes: method === 'upi' ? `Transferred instantly to UPI ID: ${destination}` : `Account: ${destination} | IFSC: ${ifscCode || 'HDFC0001234'} | Beneficiary: ${accountHolder || 'User'}`
-    };
-
-    transactionsHistory.unshift(newTxn);
-
-    const logEntry = {
-      id: 'LOG-' + Date.now(),
-      timestamp: Date.now(),
-      channel: 'system',
-      level: 'warning',
-      message: `Withdrawal of ₹${numAmount.toLocaleString('en-IN')} disbursed via ${method === 'upi' ? 'Instant UPI' : 'IMPS Bank Wire'}. UTR: ${utrNumber}.`,
-      profitEarned: 0
-    };
-    liveLogs.unshift(logEntry);
-
-    res.json({
-      success: true,
-      message: `Withdrawal of ₹${numAmount.toLocaleString('en-IN')} processed successfully. Funds disbursed.`,
-      transaction: newTxn,
-      updatedBalance: userBalance
-    });
+  app.use('/api/webhooks', (req: Request, res: Response, next) => {
+    if (!checkFinancialRate(req, 60, 60_000)) return res.status(429).json({ error: 'Too many webhook requests. Try again later.', code: 'WEBHOOK_RATE_LIMITED' });
+    next();
   });
-
-  // Reset demo data
-  app.post('/api/wallet/reset', (req: Request, res: Response) => {
-    userBalance = {
-      totalBalance: 50000.00,
-      todaysEarnings: 0,
-      totalWithdrawn: 0,
-      totalDeposited: 50000.00,
-      lockedInTrades: 0,
-      currency: '₹',
-    };
-    transactionsHistory = [
-      {
-        id: 'TXN-INIT-1',
-        type: 'deposit',
-        title: 'Initial Trading & Operation Balance',
-        amount: 50000,
-        currency: '₹',
-        timestamp: Date.now(),
-        status: 'completed',
-        method: 'Direct Working Capital',
-        referenceId: 'INIT-CAP-001',
-        notes: 'Initial sandbox balance allocated'
-      }
-    ];
-    liveLogs = [
-      {
-        id: 'LOG-INIT',
-        timestamp: Date.now(),
-        channel: 'system',
-        level: 'info',
-        message: 'AI Multi-Channel Earning System initialized with ₹50,000 capital.',
-        profitEarned: 0
-      }
-    ];
-
-    res.json({ success: true, balance: userBalance, transactions: transactionsHistory, logs: liveLogs });
-  });
-
-  // --- AI AUTONOMOUS RUNNER & CHANNELS ---
-  app.post('/api/ai/auto-cycle', async (req: Request, res: Response) => {
-    const { activeChannels, riskLevel } = req.body;
-
-    const channels: string[] = activeChannels || ['youtube', 'social', 'stock_market', 'freelance', 'news'];
-    const chosenChannel = channels[Math.floor(Math.random() * channels.length)];
-
-    let profitGenerated = 0;
-    let actionSummary = '';
-    let itemData: any = {};
-
-    try {
-      if (chosenChannel === 'stock_market') {
-        const symbols = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'NVDA', 'BTC/USDT', 'ETH/USDT', 'TATAMOTORS'];
-        const sym = symbols[Math.floor(Math.random() * symbols.length)];
-        const isProfit = Math.random() > 0.15; // 85% high win rate algo
-        const profit = isProfit ? Math.floor(350 + Math.random() * 1250) : -Math.floor(100 + Math.random() * 300);
-        profitGenerated = Math.max(50, profit);
-
-        const prompt = `Give a 1-sentence super concise technical algorithmic trading rationale for taking a profitable BUY trade on ${sym} with 2 key technical indicators (e.g., EMA crossover, MACD, Order Flow). Keep it under 25 words.`;
-        const aiRationale = await generateGeminiContentWithRetry(
-          prompt,
-          'You are an algorithmic quantitative trader bot.',
-          () => `Algorithmic Buy triggered on ${sym}: 20 EMA crossed 50 EMA with strong VWAP order flow and RSI momentum (44 -> 58).`
-        );
-
-        itemData = {
-          symbol: sym,
-          type: 'BUY',
-          entryPrice: Math.floor(500 + Math.random() * 3500),
-          pnl: profitGenerated,
-          aiSignalRationale: aiRationale
-        };
-        actionSummary = `Algo Market Bot executed ${sym} trade. Generated +₹${profitGenerated.toFixed(2)} profit.`;
-
-      } else if (chosenChannel === 'youtube') {
-        profitGenerated = Math.floor(280 + Math.random() * 950);
-        const niche = 'AI & Tech Money';
-
-        const prompt = `Generate a viral, high CPM YouTube video title and a 2-sentence monetized script hook about making money with AI or automated tools in 2026. Format: Title | Hook`;
-        const aiText = await generateGeminiContentWithRetry(
-          prompt,
-          'You are a high-CPM YouTube automation producer.',
-          () => `Top 7 Autonomous AI Agents Printing ₹1,00,000/Month in 2026 | What if your computer could find clients, write code, and deposit money into your account 24/7? In this video, we break down the exact automated pipeline you can clone today.`
-        );
-
-        let videoTitle = 'Top 10 High-Paying AI Skills in 2026 (Faceless Automation)';
-        const parts = aiText.split('|');
-        if (parts.length >= 2) {
-          videoTitle = parts[0].trim();
-        } else if (aiText) {
-          videoTitle = aiText.slice(0, 65).trim();
-        }
-
-        itemData = {
-          title: videoTitle,
-          niche,
-          estimatedRevenue: profitGenerated,
-          views: Math.floor(12000 + Math.random() * 45000),
-          cpm: (3.5 + Math.random() * 4.5).toFixed(2)
-        };
-        actionSummary = `YouTube Automation Pipeline published "${videoTitle.slice(0, 45)}...". AdSense & Affiliate revenue: +₹${profitGenerated}.`;
-
-      } else if (chosenChannel === 'freelance') {
-        profitGenerated = Math.floor(450 + Math.random() * 1800);
-
-        const prompt = `Give a realistic freelance job title on Upwork (e.g., Python scraping, Next.js dashboard, AI Bot) and a 1-sentence solution snippet the AI auto-completed. Format: Title | Solution`;
-        const aiText = await generateGeminiContentWithRetry(
-          prompt,
-          'You are an Upwork Top-Rated Plus freelance bot.',
-          () => `Build Scalable Python Playwright Scraper with Dynamic Proxy Rotation | Delivered automated async scraper with exponential backoff and JSON structured output.`
-        );
-
-        let jobTitle = 'Automate Web Scraping & AI Data Pipeline (Python/Node)';
-        let solution = 'Delivered custom Playwright script with proxy rotation and Gemini structured parsing.';
-
-        const parts = aiText.split('|');
-        if (parts.length >= 2) {
-          jobTitle = parts[0].trim();
-          solution = parts[1].trim();
-        } else if (aiText) {
-          jobTitle = aiText.slice(0, 60).trim();
-        }
-
-        itemData = {
-          title: jobTitle,
-          platform: 'Upwork',
-          budget: profitGenerated,
-          solution
-        };
-        actionSummary = `Freelance Auto-Bot won & delivered job: "${jobTitle.slice(0, 40)}...". Milestone payout: +₹${profitGenerated}.`;
-
-      } else if (chosenChannel === 'social') {
-        profitGenerated = Math.floor(180 + Math.random() * 620);
-        const platform = ['Instagram', 'Twitter / X', 'Facebook'][Math.floor(Math.random() * 3)];
-
-        const prompt = `Write a 1-sentence viral hook for ${platform} promoting an AI automation software with an affiliate link. Max 20 words.`;
-        const postHeadline = await generateGeminiContentWithRetry(
-          prompt,
-          'You are a viral growth hacker and affiliate marketer.',
-          () => `99% of creators are still doing manual work. Here is how 1 AI agent automated my entire $2,000/mo income stream.`
-        );
-
-        itemData = {
-          platform,
-          headline: postHeadline,
-          clicks: Math.floor(45 + Math.random() * 120),
-          revenue: profitGenerated
-        };
-        actionSummary = `Social Media Matrix published viral post on ${platform}. Affiliate link commissions: +₹${profitGenerated}.`;
-
-      } else { // news
-        profitGenerated = Math.floor(120 + Math.random() * 480);
-
-        const prompt = `Create a breaking tech/market news headline about AI breakthroughs or financial fintech. Under 15 words.`;
-        const newsHeadline = await generateGeminiContentWithRetry(
-          prompt,
-          'You are a financial tech news wire editor.',
-          () => `India Sovereign AI Framework & Automated Algorithmic Rails Open $10 Billion Market Opportunity`
-        );
-
-        itemData = {
-          headline: newsHeadline,
-          traffic: Math.floor(5000 + Math.random() * 18000),
-          revenue: profitGenerated
-        };
-        actionSummary = `News Arbitrage Portal generated SEO breaking article "${newsHeadline.slice(0, 40)}...". CPM & Display Ads: +₹${profitGenerated}.`;
-      }
-
-      // Add to balance
-      userBalance.totalBalance += profitGenerated;
-      userBalance.todaysEarnings += profitGenerated;
-
-      const newTxn = {
-        id: 'AI-' + Math.floor(100000 + Math.random() * 900000),
-        type: 'ai_earning',
-        channel: chosenChannel,
-        title: actionSummary,
-        amount: profitGenerated,
-        currency: '₹',
-        timestamp: Date.now(),
-        status: 'completed',
-        method: 'Autonomous AI Agent',
-        referenceId: 'AUTO-' + Date.now().toString().slice(-7),
-        notes: `Executed under ${chosenChannel.toUpperCase()} channel automation pipeline`
-      };
-
-      transactionsHistory.unshift(newTxn);
-
-      const log = {
-        id: 'LOG-' + Date.now(),
-        timestamp: Date.now(),
-        channel: chosenChannel,
-        level: 'earning',
-        message: actionSummary,
-        profitEarned: profitGenerated,
-        metadata: itemData
-      };
-      liveLogs.unshift(log);
-
-      // Keep logs list manageable
-      if (liveLogs.length > 50) liveLogs = liveLogs.slice(0, 50);
-      if (transactionsHistory.length > 50) transactionsHistory = transactionsHistory.slice(0, 50);
-
-      res.json({
-        success: true,
-        channel: chosenChannel,
-        profit: profitGenerated,
-        summary: actionSummary,
-        itemData,
-        updatedBalance: userBalance,
-        log
-      });
-
-    } catch (error: any) {
-      console.error('Error in auto-cycle:', error);
-      res.status(500).json({ error: error.message || 'Auto cycle error' });
+  async function requireUser(req: Request, res: Response) {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+      return null;
     }
-  });
-
-  // Custom AI Action Generator (On-Demand with Enhanced AI Brain)
-  app.post('/api/ai/custom-task', async (req: Request, res: Response) => {
-    const { channel, prompt, brainMode } = req.body;
-
-    try {
-      const mode = brainMode || 'hyper_growth';
-      
-      const systemInstruction = `You are AutoEarn AI's Supreme Neural Intelligence Brain (Operating in ${mode.toUpperCase()} mode).
-You specialize in 5 autonomous monetization verticals:
-1. YouTube Faceless High-CPM Automation: Generates viral 3-second hooks, audience retention pacing, SEO tags, sponsor pitches, and high-paying niche angles ($12+ CPM).
-2. Algorithmic Quantitative Trading: Analyzes multi-timeframe VWAP, 20/50/200 EMA crossovers, RSI divergence, Order Flow imbalances, and strict stop-loss/take-profit risk math.
-3. Freelance & Client Solution Hunter: Formulates Top-Rated winning proposals on Upwork/Fiverr with full executable code snippets (Python/Node/React), edge-case handling, and delivery checklists.
-4. Viral Social Media Matrix: Crafts high-engagement reels, X/Twitter viral threads, and high-converting affiliate copy with psychology-driven CTAs.
-5. News & SEO Media Arbitrage: Writes breaking journalistic financial/tech analysis with high Google Discover CTR headlines and AdSense optimization.
-
-Provide detailed, polished, actionable, and formatted output with clear sections, code or script snippets, and exact revenue estimates.`;
-
-      const userPrompt = `Channel: ${channel || 'general'}. Mode: ${mode}. User Instruction / Goal: ${prompt || 'Generate maximum revenue deliverable'}.
-Deliver a complete, high-value, production-ready output immediately.`;
-
-      const fallbackTextGenerator = () => {
-        if (channel === 'youtube') {
-          return `🎬 YOUTUBE SUPREME AI AUTOMATION ENGINE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📌 High CPM Title: "Top 7 Autonomous AI Software Earning ₹1,50,000/Month in 2026 (No Face Required)"
-🎯 Target CPM: $11.80 - $18.50 (FinTech & B2B SaaS Niche)
-
-⚡ PSYCHOLOGICAL 3-SECOND HOOK:
-"99% of people are using AI to write basic essays, while a silent 1% built autonomous code agents that deposit ₹5,000 every single morning into their account. In this video, I'm handing you the exact 3 blueprints."
-
-📋 5-PHASE RETENTION SCRIPT OUTLINE:
-1. [0:00 - 1:15] Proof of Concept: Live screen recording showing automated Upwork & YouTube revenue flow.
-2. [1:15 - 3:30] Agent Pipeline #1: Automated Python Web-Scrapers and Data Arbitrage bots.
-3. [3:30 - 5:45] Agent Pipeline #2: High-Volume Faceless Short-Form Content Synthesizer.
-4. [5:45 - 7:30] Agent Pipeline #3: Quantitative VWAP Momentum Scalper alerts.
-5. [7:30 - 9:00] Monetization Bridge: Step-by-step setup + link in pinned comment for free template download.
-
-💡 SPONSORSHIP & AFFILIATE STRATEGY:
-• Pinned Comment Bounty: Notion / Hostinger / TradingView affiliate links.
-• AdSense Yield (50K views @ $12 CPM): ₹49,200
-• Affiliate Conversions (60 sign-ups @ ₹500): ₹30,000
-• Total Projected Yield: ₹79,200 / Video`;
-        }
-
-        if (channel === 'stock_market') {
-          return `📊 QUANTITATIVE NEURAL SCALPING BRAIN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚡ Signal: CONVERGENCE BUY & ACCUMULATE
-📈 Asset: ${prompt ? prompt.slice(0, 30) : 'NIFTY 50 / NVDA / BTC'}
-⏱ Timeframe: 15-Minute & 1-Hour Intraday Momentum
-
-🎯 QUANTITATIVE EXECUTION TARGETS:
-• Primary Entry: Current VWAP Retest Zone
-• Take-Profit 1 (Scalp): +1.65% Gain
-• Take-Profit 2 (Runner): +3.40% Gain
-• Strict Invalidation Stop: -0.70% below 50 EMA baseline
-
-🔍 MULTI-INDICATOR CONFIRMATION:
-1. 20 EMA crossed above 50 EMA with high volume surge (2.8x standard deviation).
-2. RSI bullish divergence formed at 32.4, now accelerating past 54.0.
-3. Institutional Order Block retested with heavy delta absorption in order book.
-
-⚖️ RISK PROTOCOL: Maximum 1.5% portfolio risk per trade with 1:3.2 Risk-to-Reward ratio.`;
-        }
-
-        if (channel === 'freelance') {
-          return `💼 TOP-RATED FREELANCE PROPOSAL & EXECUTABLE SOLUTION
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎯 Target Job: ${prompt ? prompt.slice(0, 50) : 'Build Resilient Python/Node Web Scraper with Automated Error Recovery'}
-
-📝 WINNING CLIENT BID PROPOSAL:
-"Hi there! I specialize in production-grade automation systems with automated proxy rotation, exponential backoffs, and typed database persistence. I have already drafted a resilient working snippet tailored to your specifications and can deliver the full verified repository in under 3 hours."
-
-💻 EXECUTABLE SOLUTION CODE:
-\`\`\`typescript
-import axios from 'axios';
-
-interface ScrapeResult {
-  id: string;
-  timestamp: number;
-  data: Record<string, any>;
-}
-
-export async function executeResilientScraper(targetUrl: string): Promise<ScrapeResult> {
-  const maxRetries = 3;
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await axios.get(targetUrl, {
-        timeout: 8000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-      });
-      return {
-        id: 'SCRAPE-' + Date.now(),
-        timestamp: Date.now(),
-        data: res.data
-      };
-    } catch (err: any) {
-      if (attempt === maxRetries) throw new Error(\`Scrape failed after \${maxRetries} attempts: \${err.message}\`);
-      await new Promise(r => setTimeout(r, attempt * 1200));
-    }
+    return user;
   }
-  throw new Error('Scrape cycle terminated');
-}
-\`\`\`
 
-✅ DELIVERY PACKAGE: TypeScript code + Dockerfile + GitHub CI workflow + Video demo.`;
-        }
+  app.get('/api/wallet/data', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) {
+      res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+      return;
+    }
 
-        if (channel === 'social') {
-          return `🔥 VIRAL SOCIAL REVENUE MATRIX & AFFILIATE CAMPAIGN
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📱 Platforms: Instagram Reel + X (Twitter) Mega Thread + LinkedIn Post
-🎯 Campaign Target: High-Converting SaaS & Affiliate Subscriptions
+    const { data: walletData, error: walletInitError } = await client.rpc('ensure_user_wallet');
+    if (walletInitError) {
+      console.error('[WALLET] wallet initialization failed', walletInitError);
+      res.status(500).json({ error: 'Unable to initialize wallet', code: 'WALLET_INIT_FAILED' });
+      return;
+    }
 
-⚡ 2-SECOND VISUAL HOOK:
-"Stop trading 10 hours of manual labor for a flat paycheck. Here is how 1 autonomous AI agent generates ₹4,500/day on autopilot:"
+    const [walletResult, transactionsResult, earningsResult] = await Promise.all([
+      client.from('wallets').select('currency,balance_minor,reserved_minor').eq('user_id', user.id).maybeSingle(),
+      client.from('wallet_transactions').select('id,type,amount_minor,currency,status,provider,provider_reference,metadata,created_at').eq('user_id', user.id).order('created_at', { ascending: false }).limit(50),
+      client.from('earnings').select('id,channel,status,amount_minor,currency,provider,provider_reference,metadata,created_at').eq('user_id', user.id).order('created_at', { ascending: false }).limit(50),
+    ]);
 
-🧵 4-STAGE VIRAL THREAD:
-1. The Problem: Manual work doesn't scale and caps your earning capacity.
-2. The AI Breakthrough: Gemini 2.5/3.7 agents can scrape leads, format deliverables, and close clients.
-3. The Tool Stack: AutoEarn AI Hub + UPI/Stripe instant payout rails.
-4. The Action Plan: Clone the free open-source setup in 5 minutes.
+    if (walletResult.error || transactionsResult.error || earningsResult.error) {
+      console.error('[WALLET] Supabase read failed', walletResult.error || transactionsResult.error || earningsResult.error);
+      res.status(500).json({ error: 'Unable to load wallet data', code: 'WALLET_READ_FAILED' });
+      return;
+    }
 
-🔗 HIGH-CONVERTING CALL TO ACTION:
-"Drop a comment 'AGENT' below and I will DM you the complete source code & video guide instantly 👇"
+    const walletRow = walletResult.data || walletData;
+    const balance = {
+      totalBalance: Number(walletRow?.balance_minor ?? 0) / 100,
+      todaysEarnings: (earningsResult.data || [])
+        .filter((e: any) => e.status === 'credited' && new Date(e.created_at).toDateString() === new Date().toDateString())
+        .reduce((sum: number, e: any) => sum + Number(e.amount_minor || 0), 0) / 100,
+      totalWithdrawn: Math.abs((transactionsResult.data || [])
+        .filter((t: any) => t.type === 'withdrawal' && t.status === 'completed')
+        .reduce((sum: number, t: any) => sum + Number(t.amount_minor || 0), 0)) / 100,
+      totalDeposited: (transactionsResult.data || [])
+        .filter((t: any) => t.type === 'deposit' && t.status === 'completed')
+        .reduce((sum: number, t: any) => sum + Number(t.amount_minor || 0), 0) / 100,
+      lockedInTrades: Number(walletRow?.reserved_minor ?? 0) / 100,
+      currency: '₹',
+    };
 
-🏷 TARGET HASHTAGS:
-#AIAutomation #PassiveIncome #FreelanceHacks #UpworkTopRated #TechTools2026`;
-        }
+    const transactions = (transactionsResult.data || []).map((t: any) => ({
+      id: t.id,
+      type: t.type === 'earning' ? 'ai_earning' : t.type,
+      title: t.metadata?.title || `${t.type} transaction`,
+      amount: Math.abs(Number(t.amount_minor || 0)) / 100,
+      currency: '₹',
+      timestamp: new Date(t.created_at).getTime(),
+      status: t.status,
+      method: t.provider || undefined,
+      referenceId: t.provider_reference || t.id,
+      notes: t.metadata?.notes,
+    }));
 
-        return `📰 BREAKING FINTECH & AI ARBITRAGE REPORT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📢 Headline: "${prompt ? prompt.slice(0, 60) : 'Autonomous Sovereign AI Networks Drive Historic Revenue Expansion in 2026'}"
-📊 Monetization: High RPM Display Ads & Financial Sponsorships
+    res.json({ balance, transactions, logs: [] });
+  });
 
-🗞 EDITORIAL ANALYSIS:
-The rapid proliferation of self-orchestrating artificial intelligence agents paired with instantaneous payment rails (UPI/IMPS/SEPA) has created an unprecedented economic shift. Independent developers and digital creators now deploy autonomous multi-agent pipelines to scale digital assets globally.
+  app.post('/api/payment/order', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
 
-🔑 HIGH-RPM METRICS:
-• Search Impression Velocity: +380% Month-over-Month
-• Average RPM Yield: $14.20 across FinTech & SaaS segments
-• Automated syndication to Google Discover and major news aggregators.`;
-      };
+    const amount = Number(req.body?.amount);
+    const amountMinor = Math.round(amount * 100);
+    const currency = String(req.body?.currency || 'INR').toUpperCase();
+    const provider = String(req.body?.provider || 'razorpay').trim().toLowerCase();
+    const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
 
-      const resultText = await generateGeminiContentWithRetry(
-        userPrompt,
-        systemInstruction,
-        fallbackTextGenerator
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || currency !== 'INR') {
+      return res.status(400).json({ error: 'Invalid amount or currency', code: 'INVALID_PAYMENT_ORDER' });
+    }
+    if (provider !== 'razorpay') {
+      return res.status(400).json({ error: 'Only the verified Razorpay adapter is supported', code: 'UNSUPPORTED_PAYMENT_PROVIDER' });
+    }
+    if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+      return res.status(400).json({ error: 'Valid idempotency key is required', code: 'INVALID_IDEMPOTENCY_KEY' });
+    }
+
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const publishableKey = process.env.SUPABASE_PUBLISHABLE_KEY;
+    const authorization = req.header('authorization');
+    if (!supabaseUrl || !publishableKey || !authorization) {
+      return res.status(503).json({ error: 'Trusted payment execution is not configured', code: 'PAYMENT_EXECUTOR_NOT_CONFIGURED' });
+    }
+
+    const edgeResponse = await fetch(`${supabaseUrl}/functions/v1/create-razorpay-order`, {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+        apikey: publishableKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ amountMinor, currency, idempotencyKey }),
+    });
+
+    const payload = await edgeResponse.json().catch(() => ({
+      error: 'Payment executor returned an invalid response',
+      code: 'PAYMENT_EXECUTOR_INVALID_RESPONSE',
+    }));
+
+    return res.status(edgeResponse.status).json(payload);
+  });
+
+  app.post('/api/webhooks/:provider', async (req: Request, res: Response) => {
+    const provider = String(req.params.provider || '').trim().toLowerCase();
+    if (!provider) return res.status(400).json({ error: 'Provider is required', code: 'INVALID_PROVIDER' });
+
+    // Provider-specific signature verification MUST be implemented before this endpoint can
+    // mutate payment state. We intentionally reject all unverified webhook traffic.
+    const signature = String(req.header('x-webhook-signature') || '').trim();
+    if (!signature) {
+      return res.status(401).json({ error: 'Webhook signature required', code: 'WEBHOOK_SIGNATURE_REQUIRED' });
+    }
+
+    return res.status(501).json({
+      error: 'Provider webhook verification is not configured. No payment or wallet state was changed.',
+      code: 'WEBHOOK_PROVIDER_NOT_CONFIGURED',
+      provider
+    });
+  });
+
+  // Real payment integration is intentionally blocked until a verified provider/webhook is configured.
+  app.post('/api/wallet/deposit', (_req: Request, res: Response) => {
+    res.status(503).json({
+      error: 'Deposit provider is not configured. No balance was changed.',
+      code: 'PAYMENT_PROVIDER_NOT_CONFIGURED'
+    });
+  });
+
+  // Creates only a user-owned withdrawal request. Reservation and payout require trusted execution.
+  app.post('/api/wallet/withdraw-request', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const amountMinor = Number(req.body?.amountMinor);
+    const method = String(req.body?.method || '').trim().toLowerCase();
+    const destination = req.body?.destination && typeof req.body.destination === 'object' ? req.body.destination : {};
+    const idempotencyKey = String(req.header('idempotency-key') || req.body?.idempotencyKey || '').trim();
+
+    if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+      return res.status(400).json({ error: 'Amount must be a positive integer minor-unit value', code: 'INVALID_WITHDRAWAL_AMOUNT' });
+    }
+    if (!['upi', 'bank', 'crypto'].includes(method)) {
+      return res.status(400).json({ error: 'Unsupported withdrawal method', code: 'INVALID_WITHDRAWAL_METHOD' });
+    }
+    if (idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+      return res.status(400).json({ error: 'A valid idempotency key is required', code: 'INVALID_IDEMPOTENCY_KEY' });
+    }
+
+    const { data, error } = await client.from('withdrawal_requests').insert({
+      user_id: user.id,
+      amount_minor: amountMinor,
+      currency: 'INR',
+      method,
+      destination,
+      status: 'requested',
+      idempotency_key: idempotencyKey
+    }).select('id,amount_minor,currency,method,status,idempotency_key,created_at').single();
+
+    if (error) {
+      const duplicate = String(error.message || '').toLowerCase().includes('duplicate');
+      return res.status(duplicate ? 409 : 500).json({
+        error: duplicate ? 'Duplicate withdrawal request' : 'Unable to create withdrawal request',
+        code: duplicate ? 'WITHDRAWAL_REQUEST_DUPLICATE' : 'WITHDRAWAL_REQUEST_FAILED'
+      });
+    }
+
+    return res.status(201).json({ request: data, status: 'requested', payout: null });
+  });
+
+  // Real payout integration is intentionally blocked until a verified provider is configured.
+  app.post('/api/wallet/withdraw', (_req: Request, res: Response) => {
+    res.status(503).json({
+      error: 'Withdrawal provider is not configured. No funds were deducted.',
+      code: 'PAYOUT_PROVIDER_NOT_CONFIGURED'
+    });
+  });
+
+  // Demo capital reset is disabled; financial state must never be reset from the browser.
+  app.post('/api/wallet/reset', (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Demo wallet reset is disabled in production mode.',
+      code: 'DEMO_RESET_DISABLED'
+    });
+  });
+
+  app.get('/api/wallet/transactions', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const { data, error } = await client
+      .from('wallet_transactions')
+      .select('id,type,amount_minor,currency,status,provider,provider_reference,metadata,created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) return res.status(500).json({ error: 'Unable to load transactions', code: 'TRANSACTIONS_READ_FAILED' });
+    return res.json({ transactions: data || [] });
+  });
+
+  app.get('/api/earnings', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const { data, error } = await client
+      .from('earnings')
+      .select('id,channel,status,amount_minor,currency,provider,provider_reference,metadata,created_at,verified_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (error) return res.status(500).json({ error: 'Unable to load earnings', code: 'EARNINGS_READ_FAILED' });
+    return res.json({ earnings: data || [] });
+  });
+
+  app.post('/api/ai/usage', async (req: Request, res: Response) => {
+    const user = await requireUser(req, res);
+    if (!user) return;
+    const client = getUserScopedClient(req);
+    if (!client) return res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+
+    const { data, error } = await client.rpc('increment_ai_usage');
+    if (error) return res.status(500).json({ error: 'Unable to update AI usage', code: 'AI_USAGE_FAILED' });
+    return res.json({ usage: data });
+  });
+
+  async function requireAiUsage(req: Request, res: Response) {
+    const user = await requireUser(req, res);
+    if (!user) return null;
+
+    const client = getUserScopedClient(req);
+    if (!client) {
+      res.status(503).json({ error: 'Supabase is not configured', code: 'SUPABASE_NOT_CONFIGURED' });
+      return null;
+    }
+
+    const { data, error } = await client.rpc('increment_ai_usage');
+    if (error) {
+      const isLimit = String(error.message || '').includes('AI_DAILY_LIMIT_REACHED');
+      res.status(isLimit ? 429 : 500).json({
+        error: isLimit ? 'Daily AI limit reached' : 'Unable to update AI usage',
+        code: isLimit ? 'AI_DAILY_LIMIT_REACHED' : 'AI_USAGE_FAILED'
+      });
+      return null;
+    }
+
+    return { user, usage: data };
+  }
+
+  // --- AI CONTENT / STRATEGY SIMULATION ---
+  // This endpoint never represents real trades, ad revenue, freelance payouts, or wallet earnings.
+  app.post('/api/ai/auto-cycle', async (req: Request, res: Response) => {
+    const aiContext = await requireAiUsage(req, res);
+    if (!aiContext) return;
+
+    const requestedChannels = Array.isArray(req.body?.activeChannels) ? req.body.activeChannels : [];
+    const allowedChannels = ['youtube', 'social', 'stock_market', 'freelance', 'news'];
+    const channels = requestedChannels.filter((c: unknown): c is string => typeof c === 'string' && allowedChannels.includes(c));
+    const chosenChannel = channels[Math.floor(Math.random() * channels.length)] || 'youtube';
+
+    const prompts: Record<string, string> = {
+      youtube: 'Create a concise YouTube content idea and hook about AI tools. Do not claim views, CPM, AdSense revenue, or earnings.',
+      social: 'Create a concise social-media post idea promoting an AI software workflow. Do not claim clicks, commissions, or earnings.',
+      stock_market: 'Create a concise educational trading-analysis checklist for a hypothetical scenario. Do not claim a real trade, price, position, P&L, or investment result.',
+      freelance: 'Create a concise freelance proposal outline for an AI/software task. Do not claim an Upwork job, client, contract, milestone, or payout exists.',
+      news: 'Create a concise editorial research angle about AI/fintech. Do not claim ad revenue, RPM, traffic, or monetization.',
+    };
+
+    try {
+      const output = await generateGeminiContentWithRetry(
+        prompts[chosenChannel],
+        'You are an AI assistant. Produce content or analysis only. Never invent financial outcomes, transactions, clients, trades, revenue, or monetization evidence.',
+        () => 'Content/strategy draft generated for review. No real-world transaction or earning is represented.'
       );
 
-      // Compute task fee/earnings reward
-      const taskProfit = Math.floor(320 + Math.random() * 880);
-      userBalance.totalBalance += taskProfit;
-      userBalance.todaysEarnings += taskProfit;
-
-      const newTxn = {
-        id: 'AI-' + Math.floor(100000 + Math.random() * 900000),
-        type: 'ai_earning',
-        channel: channel || 'custom',
-        title: `Manual AI Brain Task: ${(prompt || channel || 'Deliverable').slice(0, 45)}`,
-        amount: taskProfit,
-        currency: '₹',
+      const log = {
+        id: 'SIM-' + Date.now(),
         timestamp: Date.now(),
-        status: 'completed',
-        method: 'Supreme Neural AI Brain',
-        referenceId: 'CUST-' + Date.now().toString().slice(-7),
-        notes: `Brain Mode: ${mode.toUpperCase()} - Delivered on-demand revenue asset`
+        channel: chosenChannel,
+        level: 'info',
+        message: 'SIMULATION / DEMO MODE: AI generated content/strategy only. No money was earned, traded, deposited, or withdrawn.',
+        profitEarned: 0,
+        metadata: { status: 'simulation', financialResult: false }
       };
 
-      transactionsHistory.unshift(newTxn);
-
-      res.json({
+      return res.json({
         success: true,
-        output: resultText,
-        rewardEarned: taskProfit,
-        brainMode: mode,
-        updatedBalance: userBalance
+        simulation: true,
+        status: 'simulation',
+        channel: chosenChannel,
+        output,
+        summary: 'SIMULATION / DEMO MODE — AI content/strategy generated only; no financial result.',
+        financialResult: false,
+        log,
+      });
+    } catch (error: any) {
+      console.error('AI simulation error:', error);
+      return res.status(503).json({ error: 'AI generation unavailable', code: 'AI_GENERATION_FAILED', financialResult: false });
+    }
+  });
+
+  // --- AI CONTENT GENERATION ---
+  // This route can generate content/analysis only. It cannot create or claim financial outcomes.
+  app.post('/api/ai/custom-task', async (req: Request, res: Response) => {
+    const aiContext = await requireAiUsage(req, res);
+    if (!aiContext) return;
+
+    const channel = String(req.body?.channel || 'general').trim().toLowerCase();
+    const prompt = String(req.body?.prompt || '').trim().slice(0, 5000);
+    const allowedChannels = ['youtube', 'social', 'stock_market', 'freelance', 'news', 'general'];
+    if (!allowedChannels.includes(channel) || !prompt) {
+      return res.status(400).json({ success: false, error: 'A valid channel and non-empty prompt are required.', code: 'INVALID_AI_INPUT' });
+    }
+
+    const channelInstructions: Record<string, string> = {
+      youtube: 'Create a YouTube content outline, hook, title ideas, and production checklist. Do not claim views, CPM, AdSense revenue, earnings, sponsors, or results.',
+      social: 'Create social-media content ideas, captions, hooks, and a posting checklist. Do not claim clicks, commissions, affiliate revenue, or results.',
+      stock_market: 'Create educational market-analysis methodology for a hypothetical scenario. Do not provide or imply executed trades, live positions, guaranteed returns, P&L, or profit figures.',
+      freelance: 'Create a freelance proposal, scope, implementation plan, or code outline. Do not claim a real client, job, contract, milestone, payout, or platform earnings.',
+      news: 'Create an editorial research angle, outline, or SEO-safe headline ideas. Do not claim traffic, RPM, AdSense revenue, or monetization results.',
+      general: 'Create useful software, content, research, or productivity guidance. Do not invent financial outcomes or transactions.',
+    };
+
+    try {
+      const output = await generateGeminiContentWithRetry(
+        channelInstructions[channel] + `\\nUser request: ${prompt}`,
+        'You are a safety-first AI content assistant. Generate content, analysis, or suggestions only. Never invent revenue, earnings, balances, payouts, clients, transactions, trades, investment results, views, CPM, RPM, commissions, or other financial evidence. Never present projections as actual results.',
+        () => 'Content draft generated for review. No real-world transaction or financial result is represented.'
+      );
+
+      return res.json({
+        success: true,
+        status: 'simulation',
+        simulation: true,
+        output,
+        rewardEarned: 0,
+        financialResult: false,
+        brainMode: 'safe-content',
+        message: 'Content generated. No financial credit, trade, payout, or revenue result was created.'
       });
     } catch (err: any) {
-      console.error('Custom task error handled:', err);
-      const taskProfit = 380;
-      userBalance.totalBalance += taskProfit;
-      userBalance.todaysEarnings += taskProfit;
-
-      res.json({
-        success: true,
-        output: `[Supreme AI Brain Executed for ${channel || 'Custom'}]:\n\n1. Target Strategy: High CPM Monetization & Real-Time Direct Execution.\n2. Asset Created: "${prompt || 'Automated AI Deliverable'}"\n3. Deliverable Status: Completed and verified.\n4. Working Yield: +₹${taskProfit} credited to balance.`,
-        rewardEarned: taskProfit,
-        brainMode: 'hyper_growth',
-        updatedBalance: userBalance
-      });
+      console.error('Custom task generation failed:', err);
+      return res.status(503).json({ success: false, status: 'unavailable', error: 'AI generation failed. No financial credit was created.', code: 'AI_GENERATION_FAILED', financialResult: false });
     }
   });
 
@@ -775,7 +568,7 @@ The rapid proliferation of self-orchestrating artificial intelligence agents pai
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AI Auto-Earning Multi-Portal Server running on port ${PORT}`);
+    console.log(`AutoEarnAI content and strategy server running on port ${PORT}`);
   });
 }
 

@@ -1,6 +1,6 @@
 {
-  "name": "AI Auto-Earning & Multi-Portal Hub",
-  "description": "Real-time AI autonomous revenue engine across YouTube, Social Media, Stock Markets, Freelancing & News Arbitrage with OTP auth, live wallet deposit and withdrawal gateways.",
+  "name": "AutoEarnAI — Honest AI Content & Strategy Demo",
+  "description": "AI-assisted content and strategy UI demo. No real money is generated, earned, traded, deposited, or withdrawn. All financial-looking values are simulated.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

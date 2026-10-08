@@ -12,6 +12,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { UserProfile } from '../types';
+import { supabase } from '../lib/supabase';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -31,7 +32,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [serverTestOtp, setServerTestOtp] = useState<string | null>(null);
   const [resendTimer, setResendTimer] = useState(60);
 
   useEffect(() => {
@@ -59,19 +59,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const res = await fetch('/api/auth/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phoneOrEmail: inputVal }),
+        body: JSON.stringify({ type: authType, identifier: inputVal, name: name.trim() }),
       });
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to send OTP');
-      }
-
-      setServerTestOtp(data.testOtp || '123456');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Unable to send OTP');
       setStep('otp');
       setResendTimer(45);
     } catch (err: any) {
-      setError(err.message || 'Network error while requesting OTP');
+      setError(err.message || 'Unable to send OTP');
     } finally {
       setIsLoading(false);
     }
@@ -91,19 +86,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phoneOrEmail: phoneOrEmail.trim(),
-          otp: codeToVerify,
-          name: name.trim() || undefined,
-        }),
+        body: JSON.stringify({ type: authType, identifier: phoneOrEmail.trim(), token: codeToVerify }),
       });
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Invalid OTP code');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.user || !data.session?.access_token || !data.session?.refresh_token) {
+        throw new Error(data.error || 'Invalid or expired OTP');
       }
 
-      onLoginSuccess(data.user, data.token);
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      });
+      if (sessionError) throw new Error(sessionError.message);
+
+      const user = data.user;
+      const appUser: UserProfile = {
+        id: user.id,
+        phoneNumber: user.phone ?? '',
+        email: user.email ?? undefined,
+        name: (user.user_metadata?.full_name as string | undefined)
+          || name.trim()
+          || user.email?.split('@')[0]
+          || 'AutoEarn User',
+        createdAt: new Date(user.created_at).getTime(),
+        isVerified: true,
+        kycStatus: 'unverified',
+      };
+
+      onLoginSuccess(appUser, data.session.access_token);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Verification failed');
@@ -138,12 +148,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  const handleAutoFillDemoOtp = () => {
-    const code = serverTestOtp || '123456';
-    setOtp(code.split(''));
-    handleVerifyOtp(code);
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden p-6 sm:p-8">
@@ -166,7 +170,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </h2>
           <p className="text-xs text-slate-400 mt-1">
             {step === 'input' 
-              ? 'Access real-time AI autonomous earnings, live deposits & instant withdrawals'
+              ? 'Sign in to the AutoEarnAI content and strategy workspace'
               : `6-digit security code sent to ${phoneOrEmail}`}
           </p>
         </div>
@@ -243,21 +247,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
-            {/* Quick Demo Pre-fill */}
-            <div className="flex items-center justify-between text-xs pt-1">
-              <span className="text-slate-400">Quick Test Profile:</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthType('phone');
-                  setPhoneOrEmail('9876543210');
-                  setName('AI Auto Earner');
-                }}
-                className="text-emerald-400 hover:text-emerald-300 font-semibold underline underline-offset-2 flex items-center gap-1"
-              >
-                <Sparkles className="w-3 h-3" /> Auto-fill Demo Phone
-              </button>
-            </div>
+            <p className="text-[11px] text-slate-500">A verification code is sent by the configured Supabase Auth email/SMS provider. AutoEarnAI never displays or returns the code.</p>
 
             {/* Submit Button */}
             <button
@@ -280,23 +270,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {/* STEP 2: OTP Verification */}
         {step === 'otp' && (
           <div className="space-y-5">
-            {/* Demo Code Helper Banner */}
-            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center justify-between">
-              <div>
-                <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
-                  Test OTP Code
-                </div>
-                <div className="text-sm font-mono font-bold text-white tracking-widest">
-                  {serverTestOtp || '123456'}
-                </div>
+            {/* Real OTP delivery status */}
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl">
+              <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">
+                Verification code sent
               </div>
-              <button
-                type="button"
-                onClick={handleAutoFillDemoOtp}
-                className="px-2.5 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded-lg transition-all"
-              >
-                1-Click Verify
-              </button>
+              <div className="text-xs text-slate-300 mt-1">
+                Enter the 6-digit code delivered by Supabase Auth. AutoEarnAI never receives or displays the OTP.
+              </div>
             </div>
 
             {/* 6 Digit Inputs */}
