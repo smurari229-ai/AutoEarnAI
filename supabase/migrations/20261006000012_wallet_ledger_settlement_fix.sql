@@ -114,7 +114,7 @@ begin
     user_id, wallet_user_id, type, amount_minor, currency, status,
     provider, provider_reference, idempotency_key, metadata
   ) values (
-    p_user_id, p_user_id, 'withdrawal', -p_amount_minor, p_currency, 'completed',
+    p_user_id, p_user_id, 'withdrawal', p_amount_minor, p_currency, 'completed',
     p_provider, p_provider_reference, p_idempotency_key, coalesce(p_metadata, '{}'::jsonb)
   ) returning * into existing;
 
