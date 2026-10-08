@@ -31,7 +31,7 @@ export default {
     const amountMinor = Number(body.amountMinor);
     const currency = String(body.currency ?? "INR").toUpperCase();
     const idempotencyKey = String(body.idempotencyKey ?? "").trim();
-    const userId = String(ctx.userClaims?.sub ?? "");
+    const userId = String((ctx.userClaims as unknown as { sub?: string } | null)?.sub ?? "");
 
     if (!userId || !Number.isSafeInteger(amountMinor) || amountMinor <= 0 || currency !== "INR") {
       return json({ error: "Invalid amount or currency", code: "INVALID_PAYMENT_ORDER" }, 400);
