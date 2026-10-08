@@ -3,6 +3,7 @@ import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { getAuthenticatedUser, getSupabaseClient, getUserScopedClient } from './server/supabase';
+import { isValidOtp, normalizePhone } from './server/auth-validation';
 
 dotenv.config();
 
@@ -97,12 +98,6 @@ async function startServer() {
   };
 
   const clientIp = (req: Request) => req.ip || req.socket.remoteAddress || 'unknown';
-  const normalizePhone = (value: string) => {
-    const digits = value.replace(/\\D/g, '');
-    if (digits.length === 10) return `+91${digits}`;
-    return value.trim();
-  };
-
   app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
     const type = String(req.body?.type || '').trim().toLowerCase();
     const identifier = String(req.body?.identifier || '').trim();
@@ -131,7 +126,7 @@ async function startServer() {
     const type = String(req.body?.type || '').trim().toLowerCase();
     const identifier = String(req.body?.identifier || '').trim();
     const token = String(req.body?.token || '').trim();
-    if (!['email', 'phone'].includes(type) || !identifier || !/^\\d{6}$/.test(token)) {
+    if (!['email', 'phone'].includes(type) || !identifier || !isValidOtp(token)) {
       return res.status(400).json({ error: 'Valid identifier and 6-digit verification code are required', code: 'INVALID_AUTH_INPUT' });
     }
     const normalized = type === 'phone' ? normalizePhone(identifier) : identifier.toLowerCase();
