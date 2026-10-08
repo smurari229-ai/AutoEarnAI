@@ -16,7 +16,11 @@ async function hmacHex(secret: string, raw: Uint8Array): Promise<string> {
     false,
     ["sign"],
   );
-  const digest = await crypto.subtle.sign("HMAC", key, raw);
+  // Copy into an owned ArrayBuffer to satisfy WebCrypto's BufferSource type
+  // without relying on the backing-buffer generic of Uint8Array.
+  const rawBuffer = new ArrayBuffer(raw.byteLength);
+  new Uint8Array(rawBuffer).set(raw);
+  const digest = await crypto.subtle.sign("HMAC", key, rawBuffer);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
