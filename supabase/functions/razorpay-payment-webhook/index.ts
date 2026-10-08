@@ -109,62 +109,57 @@ export default {
     }
 
     if (eventType === "payment.captured") {
-      if (paymentOrder.status === "paid") {
+      const { data: settlement, error: settlementError } = await ctx.supabaseAdmin.rpc("settle_razorpay_payment", {
+        p_provider_order_id: orderId,
+        p_payment_id: paymentId,
+        p_amount_minor: amountMinor,
+        p_currency: currency,
+        p_event_id: eventId,
+      });
+      if (settlementError) {
+        return json({ error: "Atomic payment settlement failed", code: "PAYMENT_SETTLEMENT_FAILED" }, 500);
+      }
+
+      if (settlement?.status === "already_paid") {
         if (!(await markEventProcessed(ctx, eventId))) {
           return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
         }
         return json({ received: true, alreadyPaid: true }, 200);
       }
 
-      const { data: credit, error: creditError } = await ctx.supabaseAdmin.rpc("wallet_credit", {
-        p_user_id: paymentOrder.user_id,
-        p_amount_minor: amountMinor,
-        p_currency: currency,
-        p_provider: "razorpay",
-        p_provider_reference: paymentId,
-        p_idempotency_key: `razorpay:payment:${paymentId}`,
-        p_metadata: { payment_order_id: paymentOrder.id, provider_order_id: orderId, event_id: eventId },
-      });
-      if (creditError) return json({ error: "Wallet settlement failed", code: "WALLET_SETTLEMENT_FAILED" }, 500);
+      if (settlement?.status === "terminal") {
+        if (!(await markEventProcessed(ctx, eventId))) {
+          return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
+        }
+        return json({ received: true, settled: false, status: settlement.order_status }, 200);
+      }
 
-      const { error: updateError } = await ctx.supabaseAdmin
-        .from("payment_orders")
-        .update({
-          status: "paid",
-          provider_payment_id: paymentId,
-          paid_at: new Date().toISOString(),
-          metadata: { settled_by: "razorpay-webhook", event_id: eventId },
-        })
-        .eq("id", paymentOrder.id)
-        .eq("status", "pending");
-
-      if (updateError) return json({ error: "Payment state update failed after settlement", code: "PAYMENT_STATE_UPDATE_FAILED" }, 500);
+      if (settlement?.status !== "settled") {
+        return json({ error: "Unexpected settlement state", code: "PAYMENT_SETTLEMENT_STATE_INVALID" }, 500);
+      }
 
       if (!(await markEventProcessed(ctx, eventId))) {
         return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
       }
-      return json({ received: true, settled: true, transaction: credit }, 200);
+      return json({ received: true, settled: true, transaction: settlement.transaction }, 200);
     }
 
     if (eventType === "payment.failed") {
-      const { error: failedUpdateError } = await ctx.supabaseAdmin
-        .from("payment_orders")
-        .update({ status: "failed", provider_payment_id: paymentId })
-        .eq("id", paymentOrder.id)
-        .in("status", ["pending", "processing"]);
-
-      if (failedUpdateError) {
+      const { data: failure, error: failureError } = await ctx.supabaseAdmin.rpc("mark_razorpay_payment_failed", {
+        p_provider_order_id: orderId,
+        p_payment_id: paymentId,
+        p_amount_minor: amountMinor,
+        p_currency: currency,
+      });
+      if (failureError) {
         return json({ error: "Payment failure state update failed", code: "PAYMENT_FAILURE_UPDATE_FAILED" }, 500);
       }
       if (!(await markEventProcessed(ctx, eventId))) {
         return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
       }
-      return json({ received: true, settled: false, status: "failed" }, 200);
+      return json({ received: true, settled: false, status: failure?.status ?? "unknown" }, 200);
     }
 
-    if (!(await markEventProcessed(ctx, eventId))) {
-      return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
-    }
     return json({ received: true, processed: false, event: eventType }, 200);
   }),
 };
