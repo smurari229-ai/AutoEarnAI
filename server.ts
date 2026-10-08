@@ -76,7 +76,7 @@ async function startServer() {
   // No webhook is trusted yet; the route below still rejects unconfigured providers.
   app.use(express.json({
     limit: '1mb',
-    verify: (req, _res, buf) => {
+    verify: (req: Request, _res: Response, buf: Buffer) => {
       (req as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buf);
     },
   } as any));
