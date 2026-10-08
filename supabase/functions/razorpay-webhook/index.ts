@@ -16,7 +16,11 @@ async function hmacHex(secret: string, raw: Uint8Array): Promise<string> {
     false,
     ["sign"],
   );
-  const digest = await crypto.subtle.sign("HMAC", key, raw);
+  // Copy into an owned ArrayBuffer to satisfy WebCrypto's BufferSource type
+  // without relying on the backing-buffer generic of Uint8Array.
+  const rawBuffer = new ArrayBuffer(raw.byteLength);
+  new Uint8Array(rawBuffer).set(raw);
+  const digest = await crypto.subtle.sign("HMAC", key, rawBuffer);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -25,6 +29,14 @@ function safeEqual(a: string, b: string): boolean {
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+async function markEventProcessed(ctx: any, eventId: string): Promise<boolean> {
+  const { data, error } = await ctx.supabaseAdmin.rpc("mark_webhook_event_processed", {
+    p_provider: "razorpay",
+    p_event_id: eventId,
+  });
+  return !error && data?.status === "processed";
 }
 
 export default {
@@ -70,7 +82,9 @@ export default {
     });
     if (eventError) return json({ error: "Webhook event persistence failed", code: "WEBHOOK_EVENT_RECORD_FAILED" }, 500);
 
-    if (eventRecord?.status === 'duplicate') return json({ received: true, duplicate: true }, 200);
+    // Only events marked processed are final duplicates. An unprocessed event
+    // must be allowed to retry after a transient database/provider failure.
+    if (eventRecord?.status === "duplicate") return json({ received: true, duplicate: true }, 200);
 
     const orderId = typeof eventEntity.order_id === "string" ? eventEntity.order_id : "";
     const paymentId = typeof eventEntity.id === "string" ? eventEntity.id : "";
@@ -95,45 +109,61 @@ export default {
     }
 
     if (eventType === "payment.captured") {
-      if (paymentOrder.status === "paid") return json({ received: true, alreadyPaid: true }, 200);
-
-      const { data: credit, error: creditError } = await ctx.supabaseAdmin.rpc("wallet_credit", {
-        p_user_id: paymentOrder.user_id,
+      const { data: settlement, error: settlementError } = await ctx.supabaseAdmin.rpc("settle_razorpay_payment", {
+        p_provider_order_id: orderId,
+        p_payment_id: paymentId,
         p_amount_minor: amountMinor,
         p_currency: currency,
-        p_provider: "razorpay",
-        p_provider_reference: paymentId,
-        p_idempotency_key: `razorpay:payment:${paymentId}`,
-        p_metadata: { payment_order_id: paymentOrder.id, provider_order_id: orderId, event_id: eventId },
+        p_event_id: eventId,
       });
-      if (creditError) return json({ error: "Wallet settlement failed", code: "WALLET_SETTLEMENT_FAILED" }, 500);
+      if (settlementError) {
+        return json({ error: "Atomic payment settlement failed", code: "PAYMENT_SETTLEMENT_FAILED" }, 500);
+      }
 
-      const { error: updateError } = await ctx.supabaseAdmin
-        .from("payment_orders")
-        .update({
-          status: "paid",
-          provider_payment_id: paymentId,
-          paid_at: new Date().toISOString(),
-          metadata: { settled_by: "razorpay-webhook", event_id: eventId },
-        })
-        .eq("id", paymentOrder.id)
-        .eq("status", "pending");
+      if (settlement?.status === "already_paid") {
+        if (!(await markEventProcessed(ctx, eventId))) {
+          return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
+        }
+        return json({ received: true, alreadyPaid: true }, 200);
+      }
 
-      if (updateError) return json({ error: "Payment state update failed after settlement", code: "PAYMENT_STATE_UPDATE_FAILED" }, 500);
+      if (settlement?.status === "terminal") {
+        if (!(await markEventProcessed(ctx, eventId))) {
+          return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
+        }
+        return json({ received: true, settled: false, status: settlement.order_status }, 200);
+      }
 
-      return json({ received: true, settled: true, transaction: credit }, 200);
+      if (settlement?.status !== "settled") {
+        return json({ error: "Unexpected settlement state", code: "PAYMENT_SETTLEMENT_STATE_INVALID" }, 500);
+      }
+
+      if (!(await markEventProcessed(ctx, eventId))) {
+        return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
+      }
+      return json({ received: true, settled: true, transaction: settlement.transaction }, 200);
     }
 
     if (eventType === "payment.failed") {
-      await ctx.supabaseAdmin
-        .from("payment_orders")
-        .update({ status: "failed", provider_payment_id: paymentId })
-        .eq("id", paymentOrder.id)
-        .in("status", ["pending", "processing"]);
-
-      return json({ received: true, settled: false, status: "failed" }, 200);
+      const { data: failure, error: failureError } = await ctx.supabaseAdmin.rpc("mark_razorpay_payment_failed", {
+        p_provider_order_id: orderId,
+        p_payment_id: paymentId,
+        p_amount_minor: amountMinor,
+        p_currency: currency,
+      });
+      if (failureError) {
+        return json({ error: "Payment failure state update failed", code: "PAYMENT_FAILURE_UPDATE_FAILED" }, 500);
+      }
+      if (!(await markEventProcessed(ctx, eventId))) {
+        return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
+      }
+      return json({ received: true, settled: false, status: failure?.status ?? "unknown" }, 200);
     }
 
+    // Ignore unsupported-but-authenticated events without leaving them perpetually retryable.
+    if (!(await markEventProcessed(ctx, eventId))) {
+      return json({ error: "Webhook completion marker failed", code: "WEBHOOK_COMPLETION_MARK_FAILED" }, 500);
+    }
     return json({ received: true, processed: false, event: eventType }, 200);
   }),
 };
