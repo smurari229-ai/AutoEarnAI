@@ -25,3 +25,21 @@ jobs:
 
       - name: Production build
         run: bun run build
+
+  edge-function-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Typecheck Supabase Edge Functions
+        run: >-
+          deno check
+          supabase/functions/create-razorpay-order/index.ts
+          supabase/functions/razorpay-payment-webhook/index.ts
+          supabase/functions/razorpay-webhook/index.ts
