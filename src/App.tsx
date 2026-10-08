@@ -38,6 +38,7 @@ import {
 } from './types';
 import confetti from 'canvas-confetti';
 import { supabase } from './lib/supabase';
+import { HowItWorks } from './components/HowItWorks';
 
 export default function App() {
   // Authentication State
@@ -279,7 +280,7 @@ export default function App() {
   };
 
   // On-demand AI Task Generation in any portal
-  const handleGenerateCustomTask = async (channel: string, prompt: string) => {
+  const handleGenerateCustomTask = async (channel: string, prompt?: string) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) throw new Error('Authentication required');
 
@@ -289,7 +290,7 @@ export default function App() {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${session.access_token}`,
       },
-      body: JSON.stringify({ channel, prompt }),
+      body: JSON.stringify({ channel, prompt: prompt ?? '' }),
     });
 
     const data = await res.json().catch(() => ({}));
