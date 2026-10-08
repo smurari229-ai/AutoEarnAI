@@ -15,7 +15,7 @@ export function HowItWorks() {
 
       <div className="grid gap-4 md:grid-cols-2">
         {[
-          ['AI content generation', 'REAL CAPABILITY', 'Gemini can generate drafts, ideas, analysis and suggestions. Generated text is not proof of revenue, a client, a trade or a payout.'],
+          ['AI content generation', 'REAL WHEN CONFIGURED', 'Gemini generation requires the server-side GEMINI_API_KEY. Without that key, the app uses a deterministic demo fallback and marks the result as simulation. Generated text is never proof of revenue, a client, a trade or a payout.'],
           ['Authentication', 'REAL CAPABILITY', 'Supabase Auth owns the session. Legacy demo OTP endpoints and master OTPs are disabled.'],
           ['Wallet database', 'REAL CAPABILITY', 'Supabase/Postgres stores user wallets and ledger records with row-level security. Browser state is not the financial authority.'],
           ['Deposits', 'BLOCKED', 'No payment provider is configured. Deposit requests cannot credit the wallet.'],
