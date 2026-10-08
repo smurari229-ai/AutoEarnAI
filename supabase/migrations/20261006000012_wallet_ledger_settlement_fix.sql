@@ -130,3 +130,52 @@ revoke all on function private.wallet_credit(uuid,bigint,text,text,text,text,jso
   from public, anon, authenticated;
 revoke all on function private.wallet_debit(uuid,bigint,text,text,text,text,jsonb)
   from public, anon, authenticated;
+
+
+-- The Edge Functions call PostgREST RPC by public function name. Keep the
+-- implementations in the non-exposed private schema and expose only narrowly
+-- scoped service-role wrappers.
+create or replace function public.wallet_credit(
+  p_user_id uuid,
+  p_amount_minor bigint,
+  p_currency text,
+  p_provider text,
+  p_provider_reference text,
+  p_idempotency_key text,
+  p_metadata jsonb default '{}'::jsonb
+) returns jsonb
+language sql
+security definer
+set search_path = public, private
+as $function$
+  select private.wallet_credit(
+    p_user_id, p_amount_minor, p_currency, p_provider,
+    p_provider_reference, p_idempotency_key, p_metadata
+  );
+$function$;
+
+revoke all on function public.wallet_credit(uuid,bigint,text,text,text,text,jsonb)
+  from public, anon, authenticated;
+grant execute on function public.wallet_credit(uuid,bigint,text,text,text,text,jsonb)
+  to service_role;
+
+create or replace function public.record_webhook_event(
+  p_provider text,
+  p_event_id text,
+  p_event_type text,
+  p_signature_valid boolean,
+  p_payload jsonb
+) returns jsonb
+language sql
+security definer
+set search_path = public, private
+as $function$
+  select private.record_webhook_event(
+    p_provider, p_event_id, p_event_type, p_signature_valid, p_payload
+  );
+$function$;
+
+revoke all on function public.record_webhook_event(text,text,text,boolean,jsonb)
+  from public, anon, authenticated;
+grant execute on function public.record_webhook_event(text,text,text,boolean,jsonb)
+  to service_role;
